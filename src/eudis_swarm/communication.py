@@ -1,10 +1,5 @@
-"""Abstract distance-based communication topology for Prototype 0.2A.
-
-This module models potential peer-to-peer links, not RF propagation or packet
-delivery.  A link is available when its endpoints are within the configured
-Euclidean range and neither endpoint is explicitly blocked by a communication
-fault.
-"""
+"""Model deterministic undirected communication topology for the swarm simulator.
+Links combine distance-based reachability with whole-agent and link-level faults."""
 
 from __future__ import annotations
 
@@ -42,7 +37,7 @@ class CommunicationLink:
             raise ValueError(
                 "communication link endpoints must use increasing canonical order"
             )
-        # Link records are rebuilt in the graph hot path, so keep validation local.
+        # link records are rebuilt in the graph hot path, so validation stays local.
         if not isfinite(self.distance) or self.distance < 0.0:
             raise ValueError(
                 "communication link distance must be finite and non-negative"
@@ -108,9 +103,11 @@ class CommunicationGraph:
         self._communication_range = validate_positive_real(
             communication_range, name="communication_range"
         )
-        # UAV membership never changes, so canonical pair order is fixed once.
+        # uav membership never changes, so canonical pair order is fixed once.
         self._pair_keys = tuple(combinations(self._agent_ids, 2))
+        self._pair_key_set = frozenset(self._pair_keys)
         self._blocked_agent_ids: frozenset[int] = frozenset()
+        self._blocked_links: frozenset[tuple[int, int]] = frozenset()
         self._links: dict[tuple[int, int], CommunicationLink] = {}
         self._active_links: tuple[CommunicationLink, ...] = ()
         self._active_keys: frozenset[tuple[int, int]] = frozenset()
@@ -130,6 +127,12 @@ class CommunicationGraph:
     @property
     def blocked_agent_ids(self) -> frozenset[int]:
         return self._blocked_agent_ids
+
+    @property
+    def blocked_links(self) -> frozenset[tuple[int, int]]:
+        """Return explicitly blocked links in canonical endpoint order."""
+
+        return self._blocked_links
 
     @property
     def initialized(self) -> bool:
@@ -168,6 +171,11 @@ class CommunicationGraph:
         key = (source_agent_id, destination_agent_id)
         return self._links[key]
 
+    def can_deliver(self, source_agent_id: int, destination_agent_id: int) -> bool:
+        """Return whether the undirected link currently permits delivery."""
+
+        return self.link_between(source_agent_id, destination_agent_id).available
+
     def neighbors(self, agent_id: int) -> frozenset[int]:
         """Return the currently available one-hop peers for a UAV."""
 
@@ -204,8 +212,9 @@ class CommunicationGraph:
         positions: Mapping[int, Position],
         *,
         blocked_agent_ids: Iterable[int] = (),
+        blocked_links: Iterable[tuple[int, int]] = (),
     ) -> CommunicationUpdate:
-        """Recompute all links and return changes from the previous topology."""
+        """Recompute links from positions and the current explicit fault policy."""
 
         self._validate_positions(positions)
         blocked = frozenset(blocked_agent_ids)
@@ -219,6 +228,7 @@ class CommunicationGraph:
             raise ValueError(
                 f"blocked_agent_ids contains unknown UAV IDs: {sorted(unknown_blocked)}"
             )
+        blocked_link_keys = self._normalize_blocked_links(blocked_links)
 
         new_links: dict[tuple[int, int], CommunicationLink] = {}
         for source_agent_id, destination_agent_id in self._pair_keys:
@@ -232,6 +242,7 @@ class CommunicationGraph:
                 distance <= self._communication_range
                 and source_agent_id not in blocked
                 and destination_agent_id not in blocked
+                and (source_agent_id, destination_agent_id) not in blocked_link_keys
             )
             link = CommunicationLink(
                 source_agent_id=source_agent_id,
@@ -271,6 +282,7 @@ class CommunicationGraph:
             is_initial = True
 
         self._blocked_agent_ids = blocked
+        self._blocked_links = blocked_link_keys
         self._links = new_links
         self._active_links = new_active_links
         self._active_keys = new_active_keys
@@ -322,6 +334,35 @@ class CommunicationGraph:
             agent_id: frozenset(peers) for agent_id, peers in mutable_neighbors.items()
         }
         return neighbors, tuple(components)
+
+    def _normalize_blocked_links(
+        self, blocked_links: Iterable[tuple[int, int]]
+    ) -> frozenset[tuple[int, int]]:
+        """Validate undirected pairs and return stable canonical link keys."""
+
+        normalized: set[tuple[int, int]] = set()
+        for pair in blocked_links:
+            if not isinstance(pair, tuple) or len(pair) != 2:
+                raise ValueError("blocked_links must contain two-item UAV ID tuples")
+            left_agent_id, right_agent_id = pair
+            if any(
+                not isinstance(agent_id, int) or isinstance(agent_id, bool)
+                for agent_id in pair
+            ):
+                raise ValueError("blocked_links must contain integer UAV IDs")
+            if left_agent_id == right_agent_id:
+                raise ValueError("blocked_links must not contain self-links")
+            source_agent_id, destination_agent_id = sorted(
+                (left_agent_id, right_agent_id)
+            )
+            key = (source_agent_id, destination_agent_id)
+            if key not in self._pair_key_set:
+                unknown_ids = sorted(set(key) - self._agent_id_set)
+                raise ValueError(
+                    f"blocked_links contains unknown UAV IDs: {unknown_ids}"
+                )
+            normalized.add(key)
+        return frozenset(normalized)
 
     def _validate_positions(self, positions: Mapping[int, Position]) -> None:
         supplied_ids = frozenset(positions)

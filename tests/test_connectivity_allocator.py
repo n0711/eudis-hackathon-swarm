@@ -1,7 +1,12 @@
+"""Verify deterministic allocation and receiver-local connectivity evidence.
+
+The tests ensure live authoritative peer movement cannot bypass delivered status.
+"""
+
 from __future__ import annotations
 
 from eudis_swarm.agent import Agent
-from eudis_swarm.peer_state import PeerKnowledgeState, PeerStateStore
+from eudis_swarm.peer_state import PeerKnowledgeState, PeerStateStore, PeerStatus
 from eudis_swarm.task import Task
 from eudis_swarm.task_allocator import (
     Allocation,
@@ -82,6 +87,25 @@ def test_stale_peer_is_excluded_and_does_not_make_agent_unavailable() -> None:
     assert allocation.task_id == 1
     assert allocation.predicted_peer_degree == 0
     assert allocation.predicted_isolation is True
+
+
+def test_silent_peer_is_excluded_even_while_raw_snapshot_is_fresh() -> None:
+    observer = Agent(agent_id=1, position=(0.0, 0.0), speed=1.0)
+    peer = Agent(agent_id=2, position=(10.0, 0.0), speed=1.0)
+    snapshot = peer.send_heartbeat(0.0)
+    assert snapshot is not None
+    store = PeerStateStore(1, (2,), stale_after=10.0)
+    store.receive(snapshot, 0.0)
+    allocator = CommunicationAwareTaskAllocator({1: store}, 3.0)
+    task = Task(task_id=1, position=(7.0, 0.0))
+
+    assert allocator.evaluate_candidate(observer, task).predicted_peer_degree == 1
+    assert store.observe_silence(2, timestamp=2.5001, silent_after=2.5) is True
+    assert store.state_for(2) is PeerKnowledgeState.FRESH
+    assert store.status_for(2) is PeerStatus.SILENT
+
+    # raw freshness remains available for diagnostics, but decisions require heard.
+    assert allocator.evaluate_candidate(observer, task).predicted_peer_degree == 0
 
 
 def test_prediction_uses_last_delivery_until_refreshed() -> None:

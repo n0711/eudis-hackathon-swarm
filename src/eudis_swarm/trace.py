@@ -1,4 +1,8 @@
-"""Immutable, JSON-serializable playback traces for simulation inspection."""
+"""Capture immutable, JSON-serializable playback traces for inspection.
+
+Trace data may observe world truth and agent belief side by side but never feeds
+either representation back into simulation decisions.
+"""
 
 from __future__ import annotations
 
@@ -63,6 +67,7 @@ class TracePeerKnowledge:
     last_known_position: Position | None
     last_known_status: str | None
     last_known_task: int | None
+    peer_status: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -343,6 +348,7 @@ class TraceRecorder:
             last_known_position=None if snapshot is None else snapshot.position,
             last_known_status=None if snapshot is None else snapshot.status.value,
             last_known_task=None if snapshot is None else snapshot.current_task,
+            peer_status=store.status_for(peer_id).value,
         )
 
     def _collect_events(

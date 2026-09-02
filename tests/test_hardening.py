@@ -1,3 +1,8 @@
+"""Exercise validation and lifecycle boundaries across the simulation core.
+
+These tests keep malformed state and regressing logical time out of every layer.
+"""
+
 from __future__ import annotations
 
 from math import inf, nan
@@ -10,6 +15,7 @@ from eudis_swarm.config import SimulationConfig
 from eudis_swarm.failure_manager import FailureManager
 from eudis_swarm.metrics import SimulationMetrics
 from eudis_swarm.mission import Mission, MissionEventKind, MissionState
+from eudis_swarm.peer_state import PeerStateStore
 from eudis_swarm.simulation import Simulation
 from eudis_swarm.task import Task, TaskStatus
 from eudis_swarm.task_allocator import TaskAllocator
@@ -128,10 +134,13 @@ def test_communication_update_timestamps_cannot_regress() -> None:
 
 
 def test_heartbeat_and_metrics_timestamps_cannot_regress() -> None:
-    manager = FailureManager(heartbeat_timeout=2.0)
-    manager.record_heartbeat(Heartbeat(1, (0.0, 0.0), AgentStatus.IDLE, None, 2.0))
+    store = PeerStateStore(2, (1,), stale_after=2.0)
+    store.receive(Heartbeat(1, (0.0, 0.0), AgentStatus.IDLE, None, 2.0), 2.0)
     with pytest.raises(ValueError, match="backwards"):
-        manager.record_heartbeat(Heartbeat(1, (0.0, 0.0), AgentStatus.IDLE, None, 1.0))
+        store.receive(
+            Heartbeat(1, (0.0, 0.0), AgentStatus.IDLE, None, 1.0),
+            3.0,
+        )
 
     metrics = SimulationMetrics(total_task_count=1, agents_started=1)
     metrics.record_task_completion(1, 2.0)

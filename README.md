@@ -1,7 +1,8 @@
 <h1>EUDIS Swarm</h1>
 
-**A deterministic simulator for UAV swarms that have to keep working when the
-radio does not.**
+**EUDIS Swarm is a deterministic simulator for UAV teams that must keep working
+when the radio does not. It models resilient coordination while keeping
+simulation truth separate from what each UAV has actually learned.**
 
 [![CI](https://github.com/n0711/eudis-swarm/actions/workflows/ci.yml/badge.svg)](https://github.com/n0711/eudis-swarm/actions/workflows/ci.yml)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue)](https://www.python.org/downloads/)
@@ -20,10 +21,12 @@ This repository holds the central claim as an enforced invariant:
 COMMUNICATION LOSS != UAV FAILURE
 ```
 
-Physical state (`IDLE` / `ACTIVE` / `FAILED`), network reachability
-(`REACHABLE` / `UNREACHABLE`), and each UAV's own belief about its peers
-(`UNKNOWN` / `FRESH` / `STALE`) are three independent dimensions. No code path
-collapses one into another, and the test suite asserts it.
+Physical state (`IDLE` / `ACTIVE` / `FAILED`), network reachability,
+receiver-local snapshot freshness (`UNKNOWN` / `FRESH` / `STALE`), and
+receiver-local peer status (`HEARD` / `SILENT` / `UNREACHABLE` /
+`DECLARED_FAILED`) are separate dimensions. A peer becomes
+`DECLARED_FAILED` only through the graph-mediated vote-and-quorum protocol, not
+because a heartbeat went missing.
 
 ## Why this is not another swarm demo
 
@@ -37,7 +40,7 @@ demonstrable.
 | | |
 | --- | --- |
 | Runtime dependencies | **None** — Python standard library only |
-| Tests | **86** passing, **89%** branch coverage |
+| Tests | **117** passing, **89.26%** branch coverage |
 | Type checking | Pyright, zero errors |
 | Determinism | Bit-reproducible across machines and Python 3.11–3.13 |
 
@@ -54,10 +57,11 @@ python -m eudis_swarm.simulation
 On Windows PowerShell, substitute `py -3.11 -m venv .venv` and
 `.\.venv\Scripts\Activate.ps1`.
 
-That runs the baseline scenario: four UAVs, twenty tasks, one UAV made silent
-and immobile at `t=4.00 s`. The swarm detects the failure at `t=5.75 s`,
-releases the orphaned task, reassigns it, and completes all twenty tasks at
-`t=17.25 s` with `Human interventions: 0`.
+That runs the baseline scenario: four UAVs, twenty tasks, and one physical
+fail-stop injected at `t=4.00 s`. Surviving replicas form a quorum-backed
+failure declaration at `t=5.75 s`; the mission releases the orphaned task,
+reassigns it, and completes all twenty tasks at `t=17.25 s` with
+`Human interventions: 0`.
 
 ## The result that matters
 
@@ -81,15 +85,17 @@ policy ranks candidates, and there is currently no way to ask for a point
 between them. Closing that gap is the active line of work; see the
 [roadmap](#roadmap).
 
-The connectivity-aware policy reaches its decision using only each UAV's own
-`FRESH` peer snapshots, delivered over active one-hop links. It never reads
-another UAV's authoritative position — the knowledge boundary is enforced, not
-assumed.
+For each candidate in the centralized reference policy, the connectivity
+prediction uses only that UAV's own `HEARD` peer snapshots delivered over active
+one-hop links. It never reads another UAV's authoritative position, although
+the still-central allocator does receive authoritative candidate self-state and
+global tasks.
 
 ## Where to go next
 
 | If you want to | Read |
 | --- | --- |
+| Understand the current state boundary | [`docs/distributed_state_foundation.md`](docs/distributed_state_foundation.md) — world truth, local belief, delivery, quorum, and ownership vocabulary |
 | See the swarm move | [`docs/visualization_layer.md`](docs/visualization_layer.md) — trace playback dashboard |
 | Understand failure recovery | [`docs/prototype_0_1.md`](docs/prototype_0_1.md) |
 | Understand the comms graph | [`docs/prototype_0_2a.md`](docs/prototype_0_2a.md) |
@@ -123,7 +129,28 @@ earlier documented result:
 - **Prototype 0.2B** — active one-hop links deliver immutable state snapshots
   into receiver-local `UNKNOWN` / `FRESH` / `STALE` peer views.
 - **Prototype 0.3A** — an optional connectivity-aware allocator that evaluates
-  task endpoints using each UAV's own `FRESH` peer snapshots.
+  task endpoints using each UAV's own `HEARD` peer snapshots.
+- **Distributed-state foundation (current)** — graph-delivered heartbeats,
+  receiver-local link/status evidence, quorum-backed failure declarations,
+  link-level partitions, and a locked task-ownership vocabulary.
+
+## Current milestone: distributed-state foundation
+
+The current milestone enforces a strict separation between world truth, agent
+belief, and observer-only evaluation. Heartbeats, failure votes, and failure
+declarations now use the modeled one-hop communication path; `Mission` applies
+a physical failure transition only after a local detector replica has formed a
+valid declaration from its own vote and votes delivered into its mailbox.
+
+The communication graph also accepts canonical undirected `blocked_links`, so
+two healthy sub-swarms such as `{1,2}` and `{3,4}` can continue operating while
+all cross-component traffic is cut. `TaskOwnershipState` defines the six local
+ownership meanings needed by a later claims protocol without pretending that
+leases or reconciliation already exist.
+
+See [Distributed-state foundation](docs/distributed_state_foundation.md) for the
+information-flow boundary, state semantics, scheduler order, and deliberate
+limitations.
 
 ## What Prototype 0.1 still demonstrates
 
@@ -133,10 +160,12 @@ deterministic nearest-distance baseline and move toward them at constant speed.
 They publish periodic in-process heartbeats containing position, physical
 state, current task, and logical timestamp.
 
-At `t=4.00 s`, UAV 2 is made silent and immobile. Once its last heartbeat is
-strictly older than the configured timeout, the coordinator declares it
-`FAILED`, releases Task 19, later assigns that task to UAV 1, and completes all
-20 tasks at `t=17.25 s`.
+At `t=4.00 s`, UAV 2 is physically fail-stopped and therefore emits no further
+heartbeats. Once receiver-local evidence is strictly older than the configured
+timeout, surviving peers exchange failure votes; a local replica forms a
+declaration from at least two voters and a strict majority of the possible
+non-target voters before `Mission` marks it `FAILED`, releases Task 19, later
+assigns that task to UAV 1, and completes all 20 tasks at `t=17.25 s`.
 
 See [the Prototype 0.1 technical design](docs/prototype_0_1.md) for the preserved
 physical state model, scheduler, failure recovery sequence, and original test
@@ -159,12 +188,12 @@ For a canonical pair `i < j`, its Euclidean distance is:
 d(i, j) = sqrt((x_j - x_i)^2 + (y_j - y_i)^2)
 ```
 
-The pair is available exactly when `d(i, j) <= communication_range` and neither
-endpoint is blocked by the explicit communication fault. The graph reports all
-pair records, active links, neighbors, connected components, isolated UAVs, and
-whether the network is fully connected. Updates compare consecutive snapshots
-and emit only meaningful link, isolation, partition, and reconnection
-transitions.
+The pair is available exactly when `d(i, j) <= communication_range`, neither
+endpoint is blocked by the compatibility-oriented whole-agent fault, and its
+canonical pair is not in `blocked_links`. The graph reports all pair records,
+active links, neighbors, connected components, isolated UAVs, and whether the
+network is fully connected. Updates compare consecutive snapshots and emit only
+meaningful link, isolation, partition, and reconnection transitions.
 
 Physical and communication states are deliberately independent:
 
@@ -172,7 +201,8 @@ Physical and communication states are deliberately independent:
 | --- | --- |
 | Physical agent state | `IDLE`, `ACTIVE`, or `FAILED` |
 | Communication state | `REACHABLE` when the UAV has at least one active peer link; `UNREACHABLE` when it is isolated |
-| Receiver-local peer knowledge | `UNKNOWN`, `FRESH`, or `STALE` independently for each remote UAV |
+| Receiver-local snapshot freshness | `UNKNOWN`, `FRESH`, or `STALE` independently for each remote UAV |
+| Receiver-local peer status | `HEARD`, `SILENT`, `UNREACHABLE`, or quorum-backed `DECLARED_FAILED` |
 
 Topology itself still does not use `STALE`; Prototype 0.2B models that separately
 as receiver-local information freshness. A UAV in a disconnected component of two or more UAVs remains
@@ -186,10 +216,10 @@ COMMUNICATION LOSS != UAV FAILURE
 ```
 
 A blocked UAV remains physically responsive, continues moving and completing
-tasks, keeps sending direct in-process heartbeats, and retains its work. The
-communications graph is observational in 0.2A: it does not affect heartbeat
-delivery, failure detection, allocation, or path planning. Those boundaries
-prevent an outage from being mistaken for a physical failure.
+tasks, and retains its work. Prototype 0.2A originally treated the graph as
+observational; the current foundation now uses it for heartbeat and
+failure-protocol delivery while preserving the rule that link loss cannot by
+itself declare a physical failure.
 
 See [the Prototype 0.2A technical design](docs/prototype_0_2a.md) for the exact
 graph contract, timing semantics, metrics, deterministic trace, and limitations.
@@ -199,8 +229,8 @@ graph contract, timing semantics, metrics, deterministic trace, and limitations.
 At each existing heartbeat publication time, every responsive UAV produces an
 immutable state snapshot. The one-hop transport attempts to deliver that snapshot
 to each other UAV and succeeds only when their direct `CommunicationGraph` link
-is active. There is no routing, forwarding, retry, queue, latency, or stochastic
-loss model.
+is active. The heartbeat path has no routing, forwarding, retry, queue, latency,
+or stochastic loss model.
 
 Each receiver owns an independent peer-state store. An observation is `UNKNOWN`
 before first delivery, `FRESH` while its strict age is at most
@@ -212,8 +242,11 @@ current_time - received_at > peer_state_stale_after
 
 Physical ground truth, graph reachability, and peer-information freshness remain
 separate. `STALE`, `UNKNOWN`, and `UNREACHABLE` never imply `FAILED`. Peer views
-do not release or reassign tasks in 0.2B. The original failure detector remains
-a transitional centralized mission mechanism and does not consume peer stores.
+do not directly release or reassign tasks. In the current foundation, isolated
+local failure-detector replicas consume only these delivered observations and
+locally exposed link evidence. Votes must cross active modeled links to form a
+quorum; locally originated declaration certificates retry over active links,
+while `Mission` applies their world-state recovery consequence only once.
 
 See [the Prototype 0.2B technical design](docs/prototype_0_2b.md) for the transport
 contract, deterministic outage trace, tests, metrics, and deferred work.
@@ -223,16 +256,18 @@ contract, deterministic outage trace, tests, metrics, and deferred work.
 The nearest-distance `TaskAllocator` remains the default experimental baseline.
 Selecting `--allocation-policy connectivity` uses a second greedy policy. For
 each candidate UAV/task pair it predicts direct endpoint connectivity from that
-UAV's own `FRESH` peer observations and minimizes:
+UAV's own `HEARD` peer observations and minimizes:
 
 ```text
 (predicted_isolation, -predicted_peer_degree, distance, agent_id, task_id)
 ```
 
-`STALE` and `UNKNOWN` peers contribute no predicted links. The allocator never
-reads another UAV's authoritative current position for this prediction. If all
-peer knowledge is initially unknown, every predicted degree is zero and the
-score naturally falls back to the existing distance and ID ordering.
+Only `HEARD` peers contribute predicted links. A raw `FRESH` observation is
+excluded whenever the peer status is `SILENT`, `UNREACHABLE`, or
+`DECLARED_FAILED`; the allocator never reads another UAV's authoritative current
+position for this prediction. If all peer knowledge is initially unknown, every
+predicted degree is zero and the score naturally falls back to the existing
+distance and ID ordering.
 
 The policy affects only new task proposals. `Mission` remains the centralized
 authoritative owner of assignment, and active work is never preempted. See
@@ -243,15 +278,15 @@ policy, knowledge boundary, measured comparison, and limitations.
 
 | Module | Responsibility |
 | --- | --- |
-| `agent.py` | Physical UAV state, constant-speed 2D movement, and direct heartbeat generation |
-| `task.py` | Task ownership and `UNASSIGNED` / `ASSIGNED` / `COMPLETED` states |
-| `task_allocator.py` | Distance baseline, minimal policy protocol, and local-knowledge connectivity allocator |
-| `failure_manager.py` | Latest-heartbeat storage and strict physical-failure timeout detection |
-| `communication.py` | Abstract links, communication state, dynamic graph topology, and graph transitions |
-| `messaging.py` | Instantaneous one-hop delivery of immutable snapshots across active direct links |
-| `peer_state.py` | Receiver-local last-known observations and strict freshness transitions |
-| `mission.py` | Authoritative task/agent transitions, physical recovery, events, and invariants |
-| `simulation.py` | Scenario generation, logical clock, movement, fault schedules, graph updates, and CLI |
+| `agent.py` | World-level UAV state, constant-speed 2D movement, and immutable heartbeat creation |
+| `task.py` | Authoritative `TaskStatus`, exact six-state local ownership vocabulary, and evidence classifier |
+| `task_allocator.py` | Centralized distance baseline and local-snapshot-aware connectivity reference policy |
+| `failure_manager.py` | Isolated local vote mailboxes, strict-timeout suspicion, quorum validation, and declarations |
+| `communication.py` | Undirected distance/link fault policy, canonical `blocked_links`, topology, and transitions |
+| `messaging.py` | One-hop delivery of heartbeats, failure votes, declarations, and local link evidence |
+| `peer_state.py` | Receiver-local observations, freshness, link evidence, peer status, and applied declarations |
+| `mission.py` | Authoritative world mutation after proposals/declarations, events, and invariants |
+| `simulation.py` | Scenario generation, logical clock, physics, fault scheduling, delivery, and protocol orchestration |
 | `simulation_events.py` | Structured communication and peer-knowledge event types |
 | `metrics.py` | Separate physical-mission and network metrics derived from transitions |
 | `config.py` | Validated physical and communication configuration |
@@ -262,7 +297,9 @@ policy, knowledge boundary, measured comparison, and limitations.
 
 Allocators only propose assignments; `Mission` applies them and checks
 bidirectional ownership. The optional 0.3A policy reads receiver-local peer
-stores, but neither allocator mutates agents or tasks directly.
+stores, but neither allocator mutates agents or tasks directly. Both allocation
+policies remain centralized reference mechanisms; distributed claims and
+partition reconciliation are deliberately deferred.
 
 ## Requirements and installation
 
@@ -342,7 +379,7 @@ python -m eudis_swarm.simulation --seed 1 --failure-time 100 --communication-ran
 Both policies make the same first 11 assignments. At `t=4.50 s`, the distance
 baseline selects UAV 2 -> Task 2 at `11.18` distance units. UAV 2's local peer
 store predicts zero reliable links there. The connectivity policy instead
-selects UAV 2 -> Task 3 at `24.20` units because its `FRESH` snapshots predict
+selects UAV 2 -> Task 3 at `24.20` units because its `HEARD` snapshots predict
 one direct peer link.
 
 | Result | Distance | Connectivity |
@@ -431,15 +468,20 @@ requested visualization.
 
 With the default seed, UAV 2 initially owns Task 19. Physical failure is
 injected at `t=4.00 s`; because injection precedes that tick's heartbeat, its
-last heartbeat remains `t=3.00 s`. Timeout detection uses the strict rule:
+last delivered heartbeat remains `t=3.00 s`. Local suspicion uses the strict
+rule:
 
 ```text
-now - last_heartbeat > 2.5 s
+now - max(last_heard_at, reachable_since) > failure_timeout
 ```
 
-Equality at `t=5.50 s` does not fire. Detection and Task 19 release occur at
-`t=5.75 s`. UAV 1 receives the task at `t=10.75 s`, and all 20 tasks complete at
-`t=17.25 s`. Communication observations do not alter those values.
+The receiver-arrival time, not the heartbeat's source timestamp, starts the
+evidence-age interval; reconnecting later would start a new reachability grace
+interval. In the default run, `last_heard_at` is `t=3.00 s`, so equality at
+`t=5.50 s` does not fire. At `t=5.75 s`, surviving local replicas exchange
+matching votes over available links, one replica forms a strict-majority
+declaration, and `Mission` releases Task 19. UAV 1 receives the task at
+`t=10.75 s`, and all 20 tasks complete at `t=17.25 s`.
 
 ## Run the tests
 
@@ -478,16 +520,21 @@ Coverage includes the preserved allocation and fail-stop recovery tests plus:
 - inclusive distance-based link creation and rejection outside range;
 - neighbor sets, components, isolation, and connectivity;
 - deterministic loss/restoration when positions cross the range boundary;
+- canonical link-level blocking, balanced 2+2 partitions, and reconnection;
 - one-shot transition reporting without repeated steady-state logs;
 - exact communication fault scheduling and restoration;
 - proof that an unreachable healthy UAV continues moving and working;
 - proof that communication loss does not release tasks or trigger physical
-  failure recovery; and
+  failure recovery;
 - exact regression of the original `4.00 -> 5.75 -> 10.75 -> 17.25` physical
   recovery sequence;
-- proof that only fresh delivered peer positions affect connectivity scores;
+- proof that only `HEARD` delivered peer positions affect connectivity scores;
 - proof that authoritative peer movement is invisible until a new snapshot is
-  delivered; and
+  delivered;
+- proof that silence and link loss cannot directly produce
+  `DECLARED_FAILED`, while delivered vote quorum can;
+- exact receiver-local task ownership vocabulary, including stale claims and
+  contention; and
 - deterministic baseline-versus-connectivity decision and outcome comparison.
 
 ### Six-agent smoke scenario
@@ -523,31 +570,38 @@ never merged.
 The separate `PEER STATE (PROTOTYPE 0.2B)` block reports directed delivery
 attempts, successful and link-gated undelivered messages, stale and refresh
 transitions, and the maximum number of simultaneous stale receiver-local
-observations. It does not feed mission decisions.
+observations. The metrics are observer-only; the underlying delivered
+observations may feed the connectivity reference policy and local failure
+protocol, but metric values never feed decisions.
 
 The `ALLOCATION (PROTOTYPE 0.3A)` block reports the selected policy,
 connectivity-aware assignment count, assignments predicting isolation, and mean
-and minimum predicted fresh-peer degree. Applied decision records retain the
+and minimum predicted heard-peer degree. Applied decision records retain the
 timestamp, selected IDs, distance, policy, degree, and isolation prediction.
 
 ## Current limitations
 
-- The link model is only an inclusive Euclidean distance threshold plus an
-  explicit per-UAV block. It is not RF propagation and does not calculate RSSI,
-  SINR, interference, antenna effects, terrain, or weather.
+- The link model is only an inclusive Euclidean distance threshold plus
+  explicit whole-UAV and undirected link blocks. It is not RF propagation and
+  does not calculate RSSI, SINR, interference, antenna effects, terrain, or
+  weather.
 - Peer snapshots use instantaneous one-hop in-process delivery. There are no
   queues, retries, forwarding, multi-hop routing, latency, jitter, bandwidth, or
   stochastic packet loss.
-- Peer knowledge affects only new allocations when the connectivity policy is
-  explicitly selected. It does not affect path planning, movement, existing
-  task ownership, or physical failure recovery.
-- Physical fail-stop recovery still uses the transitional centralized heartbeat
-  manager; only the new receiver-local peer knowledge is graph-mediated.
+- Peer knowledge affects new allocations when the connectivity policy is
+  explicitly selected and supplies evidence to the failure protocol. It does
+  not affect path planning or movement.
+- Failure detection is a deterministic one-hop strict-majority prototype with a
+  two-voter minimum, so fewer than three configured UAVs cannot declare
+  failure. It is not Byzantine fault tolerance, a production consensus system,
+  or proof that a real vehicle has physically failed.
 - The graph is centralized, recomputed from authoritative positions, and has no
-  ground-station or coordinator-reachability anchor. In this prototype,
-  `UNREACHABLE` specifically means isolated from every peer.
+  ground-station or coordinator-reachability anchor. Global
+  `CommunicationState.UNREACHABLE` means isolated from every peer, while local
+  `PeerStatus.UNREACHABLE` means the direct pair cannot currently deliver.
 - All components execute in one Python process. There is no distributed
-  consensus or peer-to-peer protocol.
+  deployment, process isolation, or real network transport; local replicas and
+  their peer-to-peer vote protocol are simulated deterministically.
 - Agents remain point masses without aircraft dynamics, vehicle constraints,
   terrain, collision avoidance, or energy limits.
 - Tasks remain independent points. Both policies are centralized greedy pairing,
@@ -568,9 +622,13 @@ timestamp, selected IDs, distance, policy, degree, and isolation prediction.
 - **Prototype 0.2B — implemented:** active direct links mediate immutable peer
   state delivery and receiver-local freshness, without adaptive behavior.
 - **Prototype 0.3A — implemented:** optional connectivity-aware allocation from
-  receiver-local fresh peer snapshots.
+  receiver-local heard peer snapshots.
+- **Distributed-state foundation — implemented:** delivered heartbeat and link
+  evidence, receiver-local peer status, quorum-backed declarations, link-level
+  partitions, and the six-state task-ownership seam.
 - **Later Prototype 0.3 milestones — planned:** communications-aware path
-  planning, relay, and distributed allocation experiments.
+  planning, relay, task claims/leases/epochs, partition reconciliation, and
+  distributed allocation experiments.
 - **Prototype 0.4 — planned:** QUBO / quantum-simulated optimization experiments.
 - **Prototype 0.5 — planned:** distributed ROS 2 implementation.
 - **Prototype 0.6 — planned:** ArduPilot multi-UAV SITL integration.

@@ -1,4 +1,8 @@
-"""UAV agent state and simple two-dimensional movement."""
+"""Represent authoritative UAV state and simple two-dimensional movement.
+
+Agents publish immutable snapshots, while remote reasoning must use only copies
+that the modeled network delivers into receiver-local stores.
+"""
 
 from __future__ import annotations
 
@@ -139,7 +143,7 @@ class Agent:
         return True
 
     def declare_failed(self) -> None:
-        """Apply the coordinator's failure decision after a timeout."""
+        """Apply world-state failure after a quorum-backed declaration."""
 
         self.responsive = False
         self.status = AgentStatus.FAILED

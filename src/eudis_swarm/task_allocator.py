@@ -1,4 +1,8 @@
-"""Deterministic task-allocation policies."""
+"""Propose deterministic assignments for the authoritative mission coordinator.
+
+Connectivity scoring uses only receiver-local peer evidence, while the still-central
+assignment step is intentionally documented as later distributed-systems work.
+"""
 
 from __future__ import annotations
 
@@ -109,7 +113,7 @@ class TaskAllocator:
 
 
 class CommunicationAwareTaskAllocator:
-    """Prefer assignments that local fresh peer knowledge predicts stay linked."""
+    """Prefer assignments that local ``HEARD`` peer evidence predicts stay linked."""
 
     def __init__(
         self,
@@ -125,13 +129,13 @@ class CommunicationAwareTaskAllocator:
         self._peer_state_stores = dict(peer_state_stores)
         self._communication_range = communication_range
 
-    def _fresh_peer_positions(self, agent_id: int) -> tuple[Position, ...]:
+    def _heard_peer_positions(self, agent_id: int) -> tuple[Position, ...]:
         try:
             store = self._peer_state_stores[agent_id]
         except KeyError as error:
             raise ValueError(f"missing peer-state store for UAV {agent_id}") from error
         return tuple(
-            observation.snapshot.position for observation in store.fresh_observations
+            observation.snapshot.position for observation in store.heard_observations
         )
 
     def _predicted_degree_from_positions(
@@ -148,7 +152,7 @@ class CommunicationAwareTaskAllocator:
 
     def _predicted_degree(self, agent_id: int, task: Task) -> int:
         return self._predicted_degree_from_positions(
-            task, self._fresh_peer_positions(agent_id)
+            task, self._heard_peer_positions(agent_id)
         )
 
     def evaluate_candidate(self, agent: Agent, task: Task) -> Allocation:
@@ -173,16 +177,16 @@ class CommunicationAwareTaskAllocator:
         candidate_tasks = _unassigned_tasks(tasks)
         allocations: list[Allocation] = []
 
-        fresh_positions_by_agent = {
-            agent_id: self._fresh_peer_positions(agent_id)
+        heard_positions_by_agent = {
+            agent_id: self._heard_peer_positions(agent_id)
             for agent_id in candidate_agents
         }
         ranked_pairs: list[tuple[int, int, float, int, int]] = []
         for agent in candidate_agents.values():
-            fresh_peer_positions = fresh_positions_by_agent[agent.agent_id]
+            heard_peer_positions = heard_positions_by_agent[agent.agent_id]
             for task in candidate_tasks.values():
                 degree = self._predicted_degree_from_positions(
-                    task, fresh_peer_positions
+                    task, heard_peer_positions
                 )
                 ranked_pairs.append(
                     (
@@ -194,7 +198,7 @@ class CommunicationAwareTaskAllocator:
                     )
                 )
 
-        # Scores are immutable during one proposal batch. Sorting once is
+        # scores are immutable during one proposal batch, so sorting once is
         # equivalent to repeatedly scanning every remaining UAV/task pair.
         ranked_pairs.sort()
         remaining_agent_ids = set(candidate_agents)

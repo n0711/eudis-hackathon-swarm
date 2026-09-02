@@ -16,6 +16,38 @@ and interfaces change between prototypes.
   agreement and the architectural boundaries that must be preserved.
 - `--version` flag on the `eudis-swarm` CLI.
 - Packaging metadata: project URLs, classifiers and keywords.
+- `PeerStatus` with the receiver-local `HEARD`, `SILENT`, `UNREACHABLE`, and
+  quorum-backed `DECLARED_FAILED` meanings, while retaining
+  `PeerKnowledgeState` for snapshot freshness.
+- Graph-mediated `FailureVote` and `FailureDeclaration` exchange with isolated
+  receiver mailboxes, retryable votes and certificates, timeout-bounded vote
+  evidence, and a strict-majority quorum with a two-voter minimum.
+- Canonical undirected `blocked_links` and `CommunicationGraph.can_deliver()`
+  for deterministic single-link, balanced-partition, and reconnection cases.
+- The exact six-state `TaskOwnershipState` vocabulary and a classifier that
+  reads self state, local completion evidence, and receiver-local delivered
+  observations only.
+- A newcomer-oriented distributed-state architecture guide covering world
+  truth, agent belief, observer access, scheduling, and deferred work.
+
+### Changed
+
+- Heartbeat creation no longer records authoritative source state directly in a
+  centralized failure cache. Heartbeats, failure votes, and declarations must
+  pass through the modeled one-hop transport before becoming remote evidence.
+- `Mission` now applies failure recovery only after receiving a validated
+  quorum-backed declaration; silence and link loss remain non-authoritative.
+- Failure suspicion now requires a continuously reachable timeout interval;
+  restoring a link starts a fresh grace period rather than activating an old
+  stale observation immediately.
+- Non-participating UAV software no longer advances or receives updates to its
+  private freshness and link-evidence state.
+- Connectivity scoring now consumes only complete `HEARD` status, so raw-fresh
+  snapshots do not influence decisions after silence, link loss, or declaration.
+- Communication graph updates may combine the existing whole-agent block with
+  explicit link-level blocks without changing the existing API defaults.
+- `HeartbeatTimeout` remains available as an import-compatible alias for the
+  now-explicit `FailureDeclaration` semantics.
 
 ### Fixed
 

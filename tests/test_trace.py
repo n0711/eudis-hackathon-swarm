@@ -1,4 +1,7 @@
-"""Structured playback trace tests independent of the Streamlit UI."""
+"""Verify structured playback traces independently of the Streamlit interface.
+
+The assertions keep observer data descriptive and separate from swarm decisions.
+"""
 
 from __future__ import annotations
 
@@ -67,6 +70,7 @@ def test_outage_trace_separates_physical_health_from_local_staleness() -> None:
     assert isolated_uav.physical_state == "ACTIVE"
     assert isolated_uav.neighbor_ids == ()
     assert observation.state == "STALE"
+    assert observation.peer_status == "UNREACHABLE"
     assert observation.last_known_position is not None
     assert stale_frame.metrics.stale_peer_observations == 6
 

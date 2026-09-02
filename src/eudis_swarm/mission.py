@@ -1,4 +1,8 @@
-"""Mission ownership transitions and resilience coordination."""
+"""Apply authoritative mission transitions after distributed decisions exist.
+
+The mission owns world-state mutation but never supplies peer truth to a local
+allocator or failure detector.
+"""
 
 from __future__ import annotations
 
@@ -8,7 +12,7 @@ from enum import Enum
 from typing import Iterable
 
 from .agent import Agent, AgentStatus, Heartbeat, Position
-from .failure_manager import FailureManager, HeartbeatTimeout
+from .failure_manager import FailureDeclaration, FailureManager
 from .metrics import SimulationMetrics
 from .task import Task, TaskStatus
 from .task_allocator import Allocation, AllocationPolicy
@@ -66,7 +70,7 @@ class Mission:
         if len(self.tasks) != metrics.total_task_count:
             raise ValueError("task IDs must be unique and match metrics")
         self.allocator = allocator
-        # Agent membership is immutable; reuse one deterministic traversal order.
+        # agent membership is immutable, so one traversal order can be reused.
         self._ordered_agents = tuple(
             sorted(self.agents.values(), key=lambda item: item.agent_id)
         )
@@ -142,13 +146,14 @@ class Mission:
         return heartbeats
 
     def exchange_heartbeats(self, timestamp: float) -> tuple[Heartbeat, ...]:
+        """Collect source snapshots without bypassing modeled delivery."""
+
         self._require_running()
         timestamp = self._observe_time(timestamp)
         heartbeats: list[Heartbeat] = []
         for agent in self._ordered_agents:
             heartbeat = agent.send_heartbeat(timestamp)
             if heartbeat is not None:
-                self.failure_manager.record_heartbeat(heartbeat)
                 heartbeats.append(heartbeat)
         return tuple(heartbeats)
 
@@ -226,16 +231,19 @@ class Mission:
             self._apply_allocation(allocation, timestamp)
         return allocations
 
-    def _declare_and_release(self, timeout: HeartbeatTimeout, timestamp: float) -> None:
-        agent = self.agents[timeout.agent_id]
+    def _declare_and_release(
+        self, declaration: FailureDeclaration, timestamp: float
+    ) -> None:
+        agent = self.agents[declaration.agent_id]
+        task_id = agent.current_task
         self.metrics.record_failure_detection(
-            agent.agent_id, timestamp, timeout.last_heartbeat
+            agent.agent_id, timestamp, declaration.last_heartbeat
         )
         self._event(
             MissionEventKind.HEARTBEAT_TIMEOUT,
             timestamp,
             agent_id=agent.agent_id,
-            task_id=timeout.task_id,
+            task_id=declaration.task_id,
         )
         LOGGER.info(
             "[HEARTBEAT] UAV %d heartbeat timeout at t=%.2fs",
@@ -248,13 +256,20 @@ class Mission:
             MissionEventKind.FAILURE_DECLARED,
             timestamp,
             agent_id=agent.agent_id,
-            task_id=timeout.task_id,
+            task_id=declaration.task_id,
         )
-        LOGGER.info("[FAILURE] UAV %d declared FAILED", agent.agent_id)
+        LOGGER.info(
+            "[FAILURE] UAV %d declared FAILED by UAV %d with %d/%d votes",
+            agent.agent_id,
+            declaration.declarer_agent_id,
+            len(declaration.voter_agent_ids),
+            declaration.required_votes,
+        )
 
-        if timeout.task_id is None:
+        # task mutation is a world-state consequence, not failure evidence.
+        if task_id is None:
             return
-        task = self.tasks[timeout.task_id]
+        task = self.tasks[task_id]
         if task.status is TaskStatus.COMPLETED:
             return
         if (
@@ -277,16 +292,33 @@ class Mission:
             agent.agent_id,
         )
 
-    def detect_and_recover(self, timestamp: float) -> list[HeartbeatTimeout]:
+    def detect_and_recover(
+        self,
+        timestamp: float,
+        declarations: Iterable[FailureDeclaration],
+    ) -> list[FailureDeclaration]:
+        """Apply only quorum-backed declarations produced by the failure protocol."""
+
         self._require_running()
         timestamp = self._observe_time(timestamp)
-        timeouts = self.failure_manager.detect_timeouts(self._ordered_agents, timestamp)
-        for timeout in timeouts:
-            self._declare_and_release(timeout, timestamp)
-        if timeouts:
+        detected = tuple(declarations)
+        applied: list[FailureDeclaration] = []
+        for declaration in detected:
+            if not self.failure_manager.recognizes_declaration(declaration):
+                raise ValueError(
+                    "failure declaration was not produced by the configured protocol"
+                )
+            if declaration.detected_at > timestamp:
+                raise ValueError("failure declaration cannot follow recovery time")
+            # protocol certificates may retry, but world mutation happens once.
+            if self.agents[declaration.agent_id].status is AgentStatus.FAILED:
+                continue
+            self._declare_and_release(declaration, timestamp)
+            applied.append(declaration)
+        if applied:
             self.allocate_tasks(timestamp)
             self.assert_consistent()
-        return timeouts
+        return applied
 
     def complete_task(self, agent_id: int, task_id: int, timestamp: float) -> None:
         self._require_running()

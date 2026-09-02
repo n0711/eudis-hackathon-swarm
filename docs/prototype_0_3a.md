@@ -1,5 +1,9 @@
 # Prototype 0.3A: connectivity-aware task allocation
 
+This document explains the centralized reference allocator introduced in
+Prototype 0.3A. The current distributed-state foundation further requires a
+peer's complete local status to be `HEARD` before its snapshot affects scoring.
+
 ## Objective
 
 Prototype 0.3A is the first milestone in which delivered communication
@@ -49,15 +53,18 @@ endpoint. It examines only UAV `i`'s own `PeerStateStore`.
 
 For each peer `k`:
 
-- `FRESH`: use the position in the last successfully delivered immutable
+- `HEARD`: use the position in the last successfully delivered immutable
   snapshot;
-- `STALE`: exclude it;
-- `UNKNOWN`: exclude it.
+- `SILENT`, `UNREACHABLE`, or `DECLARED_FAILED`: exclude it.
+
+Raw freshness remains separately observable as `UNKNOWN`, `FRESH`, or `STALE`.
+`FRESH` is necessary but no longer sufficient for connectivity scoring because
+a blocked link or protocol declaration is stronger local evidence.
 
 The predicted degree is:
 
 ```text
-predicted_degree(i, j) = count of FRESH peers k where
+predicted_degree(i, j) = count of HEARD peers k where
 distance(Task_j.position, last_delivered_position_i_knows_for_k)
     <= communication_range
 ```
@@ -105,7 +112,7 @@ eligible if its authoritative physical state is otherwise idle and healthy.
 allocation occurs before the first graph-mediated delivery. Peer stores are
 therefore initially `UNKNOWN`.
 
-When no candidate has useful fresh peer information, every predicted degree is
+When no candidate has useful heard peer information, every predicted degree is
 zero. The leading score terms tie, so distance and IDs reproduce the baseline
 ordering naturally. There is no authoritative-peer lookup or scheduler hack.
 
@@ -121,7 +128,7 @@ python -m eudis_swarm.simulation --seed 1 --failure-time 100 --communication-ran
 The policies make identical decisions through allocation index 10. At
 `t=4.50 s`, UAV 2 is available and the decision diverges:
 
-| Candidate | Travel distance | Predicted fresh degree | Predicted isolation |
+| Candidate | Travel distance | Predicted heard degree | Predicted isolation |
 | --- | ---: | ---: | --- |
 | UAV 2 -> Task 2 | `11.18` | `0` | yes |
 | UAV 2 -> Task 3 | `24.20` | `1` | no |
@@ -152,7 +159,7 @@ optimal.
 ## Reporting and metrics
 
 Every applied allocation record retains its logical timestamp, selected agent
-and task IDs, travel distance, policy, predicted fresh-peer degree, and predicted
+and task IDs, travel distance, policy, predicted heard-peer degree, and predicted
 isolation flag where applicable.
 
 The `ALLOCATION (PROTOTYPE 0.3A)` summary reports:
@@ -169,7 +176,7 @@ candidates are not logged at INFO level.
 ## Validation
 
 Focused tests cover the unchanged distance baseline, initial unknown fallback,
-fresh connectivity preference, stale/unknown exclusion, last-delivered versus
+heard connectivity preference, non-heard exclusion, last-delivered versus
 authoritative peer position, refresh behavior, deterministic tie-breaking,
 failed-agent exclusion, decision metadata, deterministic side-by-side outcomes,
 and every Prototype 0.1/0.2 regression.
@@ -182,6 +189,6 @@ locations and does not jointly predict simultaneous assignments or motion.
 
 Prototype 0.3A adds no task preemption, stealing, relay role, topology-repair
 movement, communication-aware path planning, multi-hop routing, forwarding,
-queues, retransmission, latency, distributed auction, consensus, leader
-election, ROS 2, MAVLink, autopilot integration, SITL, QUBO, QAOA, or quantum
-simulation. Those remain separately scoped future work.
+queues, general reliable heartbeat retransmission, latency, distributed auction,
+consensus, leader election, ROS 2, MAVLink, autopilot integration, SITL, QUBO,
+QAOA, or quantum simulation. Those remain separately scoped future work.

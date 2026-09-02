@@ -1,4 +1,8 @@
-"""Deterministic Prototype 0.3A simulation and command-line entry point."""
+"""Orchestrate deterministic world physics, network delivery, and local evidence.
+
+World truth advances the simulation while agent decisions receive only self-state
+and messages or link evidence that the modeled network actually delivered.
+"""
 
 from __future__ import annotations
 
@@ -13,7 +17,7 @@ from . import __version__
 from .agent import Agent, AgentStatus, Heartbeat, Position
 from .communication import CommunicationGraph, CommunicationUpdate
 from .config import SimulationConfig
-from .failure_manager import FailureManager
+from .failure_manager import FailureDeclaration, FailureManager
 from .messaging import DeliveryBatch, PeerStateTransport
 from .metrics import SimulationMetrics
 from .mission import Mission
@@ -149,7 +153,10 @@ class Simulation:
             agents=selected_agents,
             tasks=selected_tasks,
             allocator=allocator,
-            failure_manager=FailureManager(config.failure_timeout),
+            failure_manager=FailureManager(
+                config.failure_timeout,
+                self.peer_state_stores,
+            ),
             metrics=metrics,
         )
         self._history: dict[int, list[tuple[float, Position]]] = {
@@ -308,7 +315,11 @@ class Simulation:
 
     def _advance_peer_freshness(self, timestamp: float) -> None:
         stale_transitions = 0
+        participating_agent_ids = frozenset(self._participating_agent_ids())
         for observer_agent_id, store in sorted(self.peer_state_stores.items()):
+            # failed software cannot advance its private clock or local beliefs.
+            if observer_agent_id not in participating_agent_ids:
+                continue
             for peer_agent_id in store.advance_time(timestamp):
                 stale_transitions += 1
                 self._peer_state_event(
@@ -333,7 +344,11 @@ class Simulation:
     def _deliver_peer_state(
         self, snapshots: tuple[Heartbeat, ...], timestamp: float
     ) -> DeliveryBatch:
-        batch = self.peer_state_transport.deliver(snapshots, timestamp)
+        batch = self.peer_state_transport.deliver(
+            snapshots,
+            timestamp,
+            receiving_agent_ids=self._participating_agent_ids(),
+        )
         self.mission.metrics.record_peer_message_batch(
             timestamp,
             attempted=batch.attempted,
@@ -366,6 +381,46 @@ class Simulation:
             batch.attempted,
         )
         return batch
+
+    def _participating_agent_ids(self) -> tuple[int, ...]:
+        """Return UAVs whose local software can execute at this world instant."""
+
+        return tuple(
+            agent.agent_id for agent in self.mission.ordered_agents if agent.responsive
+        )
+
+    def _exchange_failure_evidence(
+        self, timestamp: float
+    ) -> tuple[FailureDeclaration, ...]:
+        """Route local suspicion and declaration messages through active links."""
+
+        participants = self._participating_agent_ids()
+        manager = self.mission.failure_manager
+        votes = manager.propose_votes(
+            timestamp,
+            participating_agent_ids=participants,
+        )
+        self.peer_state_transport.deliver_failure_votes(
+            votes,
+            manager,
+            timestamp,
+            receiving_agent_ids=participants,
+        )
+        declarations = manager.detect_declarations(
+            timestamp,
+            participating_agent_ids=participants,
+        )
+        # world recovery consumes only new targets, while every locally
+        # originated certificate remains eligible for network retransmission.
+        outgoing_declarations = manager.declarations_for_broadcast(
+            participating_agent_ids=participants,
+        )
+        self.peer_state_transport.deliver_failure_declarations(
+            outgoing_declarations,
+            timestamp,
+            receiving_agent_ids=participants,
+        )
+        return declarations
 
     def _start_communication_fault(self, timestamp: float) -> None:
         agent_id = self.config.comm_fault_agent_id
@@ -416,6 +471,10 @@ class Simulation:
         update = self.communication_graph.update(
             observed_positions,
             blocked_agent_ids=self._blocked_communication_agents,
+        )
+        self.peer_state_transport.synchronize_link_evidence(
+            timestamp,
+            observing_agent_ids=self._participating_agent_ids(),
         )
         self._last_communication_update = timestamp
         observed_unreachable_ids = (
@@ -605,7 +664,7 @@ class Simulation:
                     timestamp - last_physical_update_time
                 )
 
-            # A failure scheduled on a boundary wins over heartbeat emission and
+            # a failure scheduled on a boundary wins over heartbeat emission and
             # task completion at that same timestamp.
             if failure_due:
                 failure_injected = self.mission.inject_failure(
@@ -628,7 +687,7 @@ class Simulation:
             self._update_communication_graph(timestamp, communication_positions)
             self._advance_peer_freshness(timestamp)
 
-            # Communication-only boundaries are observational. They must not
+            # communication-only boundaries are observational and must not
             # introduce extra task completion, allocation, or failure checks.
             if not mission_boundary:
                 self._record_positions(timestamp, communication_positions)
@@ -636,14 +695,15 @@ class Simulation:
                 self._capture_trace_frame(timestamp, communication_positions)
                 continue
 
-            # Publication precedes centralized recovery and new allocation.
+            # publication precedes protocol-backed recovery and new allocation.
             if heartbeat_due:
                 snapshots = self.mission.exchange_heartbeats(timestamp)
                 self._deliver_peer_state(snapshots, timestamp)
                 while next_heartbeat <= timestamp + epsilon:
                     next_heartbeat += self.config.heartbeat_interval
 
-            self.mission.detect_and_recover(timestamp)
+            declarations = self._exchange_failure_evidence(timestamp)
+            self.mission.detect_and_recover(timestamp, declarations)
             self._complete_arrivals(timestamp)
             self.mission.allocate_tasks(timestamp)
             self._record_positions(timestamp)

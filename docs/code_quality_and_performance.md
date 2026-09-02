@@ -1,5 +1,9 @@
 # Code quality and performance review
 
+This document records the focused cleanup and performance work measured at its
+named baseline commit. Later milestones preserve the conclusions while
+tightening peer eligibility from raw freshness to complete `HEARD` status.
+
 ## Scope and method
 
 This cleanup reviewed every source module, test, prototype document, package
@@ -30,7 +34,7 @@ not dominant.
 - Both allocators compute static pair scores once, sort once, and greedily skip
   pairs whose UAV or task was already selected. This is equivalent to repeated
   minimum scans because allocation proposals do not mutate state within a batch.
-- Connectivity allocation collects each candidate UAV's `FRESH` delivered peer
+- Connectivity allocation collects each candidate UAV's `HEARD` delivered peer
   positions once per batch. It still uses no authoritative remote position.
 - The graph caches its immutable canonical UAV pairs and current active-link
   tuple/set. Link semantics and inclusive Euclidean range are unchanged.
@@ -81,7 +85,7 @@ they are required by tests, metrics, documentation, and visualization.
 
 ## Complexity
 
-Let `N` be available UAVs, `M` unassigned tasks, `K=min(N,M)`, and `P` fresh
+Let `N` be available UAVs, `M` unassigned tasks, `K=min(N,M)`, and `P` heard
 peer observations per candidate UAV.
 
 | Operation | Before | After |
@@ -107,7 +111,8 @@ peer observations per candidate UAV.
 ## Preserved invariants and remaining limits
 
 Golden tests preserve Prototype 0.1 recovery, 0.2A topology, 0.2B strict
-freshness/delivery, and the 0.3A UAV 2 -> Task 2 versus UAV 2 -> Task 3 decision.
+freshness/delivery, and the 0.3A UAV 2 -> Task 2 versus UAV 2 -> Task 3 decision
+using only status-qualified `HEARD` observations.
 Distance remains the default. Communication loss still does not imply physical
 failure, and stale peer state still cannot release work.
 

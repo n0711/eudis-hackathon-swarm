@@ -1,3 +1,6 @@
+"""Verify receiver-local peer evidence transitions and delivery boundaries.
+The tests keep freshness, reachability, silence, and declared failure distinct."""
+
 from __future__ import annotations
 
 import pytest
@@ -5,7 +8,7 @@ import pytest
 from eudis_swarm.agent import Agent, AgentStatus, Heartbeat
 from eudis_swarm.communication import CommunicationGraph
 from eudis_swarm.messaging import PeerStateTransport
-from eudis_swarm.peer_state import PeerKnowledgeState, PeerStateStore
+from eudis_swarm.peer_state import PeerKnowledgeState, PeerStateStore, PeerStatus
 
 
 def _stores(
@@ -120,6 +123,28 @@ def test_peer_freshness_uses_strict_timeout_and_refreshes() -> None:
     assert store.state_for(2) is PeerKnowledgeState.STALE
     assert store.receive(_snapshot(2, 3.0), 3.0) is True
     assert store.state_for(2) is PeerKnowledgeState.FRESH
+
+
+def test_silence_and_insufficient_quorum_never_declare_failure() -> None:
+    store = PeerStateStore(1, (2, 3), stale_after=2.5)
+    store.receive(_snapshot(2, 0.0), 0.0)
+    # keep the link available so this is silence rather than known unreachability.
+    store.observe_link_state(2, reachable=True, timestamp=0.0)
+
+    assert store.status_for(2) is PeerStatus.HEARD
+    assert store.advance_time(2.5001) == (2,)
+    assert store.status_for(2) is PeerStatus.SILENT
+    assert store.declared_failed_peer_ids == frozenset()
+
+    with pytest.raises(ValueError, match="valid quorum"):
+        store.apply_failure_declaration(
+            2,
+            voter_agent_ids=(1,),
+            required_votes=2,
+        )
+
+    assert store.status_for(2) is PeerStatus.SILENT
+    assert store.declared_failed_peer_ids == frozenset()
 
 
 @pytest.mark.parametrize("value", [0.0, -1.0, True, float("nan"), float("inf")])

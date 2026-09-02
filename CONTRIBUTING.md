@@ -1,8 +1,7 @@
 # Contributing
 
-Thanks for looking at EUDIS Swarm. This document covers the working agreement
-for the repository — most of it exists to protect one property: **every
-published result must stay exactly reproducible**.
+Thanks for looking at EUDIS Swarm. This guide protects both reproducible results
+and the boundary between simulated world truth and receiver-local evidence.
 
 ## The one rule that matters
 
@@ -46,13 +45,48 @@ refactor, and needs discussion first.
 
 | Boundary | Rule |
 | --- | --- |
-| Physical vs communication state | `IDLE`/`ACTIVE`/`FAILED` never derives from link state. `UNREACHABLE`, `STALE` and `UNKNOWN` must never imply `FAILED`. |
+| World truth vs agent belief | Physics, authoritative positions, global tasks, and topology belong to the simulation. An agent-local component may use self state and delivered/local evidence only. |
+| Physical vs communication state | `IDLE`/`ACTIVE`/`FAILED` never derives directly from link state. `SILENT`, `UNREACHABLE`, `STALE`, and `UNKNOWN` must never imply `FAILED`. |
+| Silence vs declaration | A timeout may create a local `FailureVote`; only a validated quorum in one replica's mailbox may create `DECLARED_FAILED` and authorize recovery. |
+| Emission vs delivery | Creating a heartbeat, vote, or declaration is not delivery. Remote state changes must pass through `PeerStateTransport` and an available modeled link. |
+| Task truth vs ownership evidence | `TaskStatus` is authoritative world state. Agent-local code uses only the six `TaskOwnershipState` values and must treat a stale peer claim as evidence, not as unclaimed work. |
 | Proposal vs authority | Allocators propose `Allocation` records. Only `Mission` mutates agents and tasks. |
 | Local vs global knowledge | An allocator reading peer state may read only the deciding UAV's own store, never another UAV's authoritative position. |
 | Observation vs behaviour | Metrics and traces are derived from transitions. They never feed decisions back into the simulation. |
 
 `Mission.assert_consistent()` enforces bidirectional task ownership and is
-called after every state-changing operation. Leave those calls in place.
+called internally after mission start and recovery. `Simulation` also calls it
+at scheduler checkpoints; preserve those checks and add one after any new
+compound mutation path.
+
+`Mission.exchange_heartbeats()` creates immutable source snapshots only. Do not
+reintroduce a call that records them directly in `FailureManager`; receiver
+heartbeat evidence must come from successful `PeerStateTransport.deliver()`
+calls.
+
+`CommunicationGraph` is allowed to use authoritative positions because it is
+the world-level network model. The only topology fact copied into a peer store
+is the pair-local delivery result exposed by
+`PeerStateTransport.synchronize_link_evidence()`; do not copy positions,
+components, or physical health through that adapter.
+
+Failure suspicion requires a previously delivered observation and a direct link
+that has remained continuously reachable beyond the strict timeout. Preserve
+the threshold `max(2, floor((N - 1) / 2) + 1)`: the suspected UAV is excluded
+from `N - 1`, and one observer must never be able to declare a peer failed.
+Repeated votes make unchanged evidence retryable, while votes older than the
+timeout must not count toward a declaration. Locally originated declaration
+certificates remain available for graph-mediated retries, but their world-state
+consequence is applied only once.
+
+World truth may decide whether a UAV's software can execute, but inactive
+software must not mutate its private freshness or link-evidence state. That
+execution gate must not reveal physical health to any other replica.
+
+For the complete rationale and state vocabulary, read
+[`docs/distributed_state_foundation.md`](docs/distributed_state_foundation.md)
+before changing failure detection, peer state, messaging, task ownership, or
+allocation.
 
 ## Adding an allocation policy
 
@@ -69,6 +103,12 @@ name to `SimulationConfig.allocation_policy` validation and to the CLI, and
 cover it with a deterministic comparison test against an existing policy on
 identical inputs.
 
+The current `AllocationPolicy` interface is a centralized reference seam, not a
+distributed claims protocol. If a policy contains an agent-local scorer, pass
+that scorer exactly one UAV's self state and its own `PeerStateStore`; do not
+give it another UAV's live `Agent`, global position, or authoritative task
+ownership as peer evidence.
+
 ## Tests
 
 New behaviour needs a test that would fail without it. Prefer exact assertions
@@ -76,6 +116,9 @@ on timestamps and counts over loose ones — this is a deterministic simulator,
 so `assert duration == 17.25` is both legal and more useful than a tolerance.
 
 Name tests after the property they protect, not the function they call.
+For distributed-state changes, include a negative assertion: prove that the
+forbidden shortcut—undelivered heartbeat refresh, silence-to-failure promotion,
+cross-partition delivery, or live-peer lookup—cannot occur.
 
 ## Commits
 

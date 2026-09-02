@@ -1,3 +1,8 @@
+"""Compare deterministic distance and receiver-evidence allocation outcomes.
+
+The integration checks preserve exact decisions while enforcing `HEARD` eligibility.
+"""
+
 from __future__ import annotations
 
 from dataclasses import replace
@@ -103,7 +108,8 @@ def test_connectivity_policy_makes_an_explainable_different_decision() -> None:
     assert distance.metrics.total_communication_degraded_duration == 8.25
     assert connectivity.metrics.total_communication_degraded_duration == 8.25
     assert connectivity.metrics.connectivity_aware_assignment_count == 20
-    assert connectivity.metrics.predicted_isolation_assignment_count == 11
+    # one raw-fresh but non-heard peer is now correctly excluded from scoring.
+    assert connectivity.metrics.predicted_isolation_assignment_count == 12
 
 
 def test_connectivity_comparison_is_deterministic() -> None:
