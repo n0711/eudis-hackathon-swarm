@@ -9,6 +9,7 @@ import random
 from dataclasses import dataclass
 from typing import Mapping, Sequence
 
+from . import __version__
 from .agent import Agent, AgentStatus, Heartbeat, Position
 from .communication import CommunicationGraph, CommunicationUpdate
 from .config import SimulationConfig
@@ -696,6 +697,12 @@ def configure_logging(level: str = "INFO") -> None:
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Run the EUDIS resilient swarm Prototype 0.3A simulation."
+    )
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"eudis-swarm {__version__}",
+        help="print the package version and exit",
     )
     parser.add_argument("--agents", type=int, default=4, help="number of UAV agents")
     parser.add_argument("--tasks", type=int, default=20, help="number of mission tasks")

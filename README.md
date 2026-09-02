@@ -1,29 +1,129 @@
-# EUDIS Swarm
+<h1>EUDIS Swarm</h1>
 
-EUDIS Swarm is an early-stage resilience experiment for the EUDIS Defence
-Hackathon 2026 (Autumn Edition), in the swarm coordination challenge area. The
-eventual goal is a communications-aware autonomous UAV swarm. The repository
-contains incremental, deterministic simulation prototypes:
+**A deterministic simulator for UAV swarms that have to keep working when the
+radio does not.**
 
-- **Prototype 0.1** detects one fail-stop UAV, releases its unfinished task,
-  reallocates that task, and finishes the mission without human intervention.
-- **Prototype 0.2A** adds an explicit, time-varying communications graph and a
-  deterministic communication outage/restoration experiment without changing
-  physical failure recovery or task decisions.
-- **Prototype 0.2A.1** hardens configuration, logical-time, mission-lifecycle,
-  invariant testing, and automated quality checks without adding swarm behavior.
-- **Prototype 0.2B** uses active one-hop graph links to deliver immutable state
-  snapshots into receiver-local `UNKNOWN` / `FRESH` / `STALE` peer views.
-- **Prototype 0.3A** adds an optional connectivity-aware greedy allocator that
-  evaluates task endpoints using each candidate UAV's `FRESH` peer snapshots.
+[![CI](https://github.com/n0711/eudis-swarm/actions/workflows/ci.yml/badge.svg)](https://github.com/n0711/eudis-swarm/actions/workflows/ci.yml)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue)](https://www.python.org/downloads/)
+[![Coverage 89%](https://img.shields.io/badge/coverage-89%25-brightgreen)](#run-the-tests)
+[![Checked with Pyright](https://img.shields.io/badge/types-pyright%20strict--standard-informational)](https://microsoft.github.io/pyright/)
 
-> **Simulation only:** these prototypes are algorithmic, two-dimensional
-> point-mass simulations. The distance threshold and instantaneous one-hop state
-> delivery are abstract models, not RF or network-protocol results. Nothing
-> models real flight dynamics, radios, network transport, autopilots, sensors,
-> collision avoidance,
-> or safety-critical operation, and it must not be interpreted as flight-ready
-> software.
+Most multi-UAV coordination work assumes reliable communication and treats a
+silent aircraft as a lost one. In a contested electromagnetic environment both
+assumptions are wrong, and the second one is expensive: a jammed UAV that is
+still flying, still working, and still completing tasks gets written off, and
+its work gets needlessly reassigned.
+
+This repository holds the central claim as an enforced invariant:
+
+```text
+COMMUNICATION LOSS != UAV FAILURE
+```
+
+Physical state (`IDLE` / `ACTIVE` / `FAILED`), network reachability
+(`REACHABLE` / `UNREACHABLE`), and each UAV's own belief about its peers
+(`UNKNOWN` / `FRESH` / `STALE`) are three independent dimensions. No code path
+collapses one into another, and the test suite asserts it.
+
+## Why this is not another swarm demo
+
+Every result published in this README is reproducible from a documented command
+line, to the exact timestamp. There is no wall-clock time, no unseeded
+randomness, and no order-dependent iteration anywhere in the simulator. Run the
+commands below on any machine and you get the same numbers — which is the
+property that makes a coordination algorithm verifiable rather than merely
+demonstrable.
+
+| | |
+| --- | --- |
+| Runtime dependencies | **None** — Python standard library only |
+| Tests | **86** passing, **89%** branch coverage |
+| Type checking | Pyright, zero errors |
+| Determinism | Bit-reproducible across machines and Python 3.11–3.13 |
+
+## Quickstart
+
+```bash
+git clone https://github.com/n0711/eudis-swarm.git
+cd eudis-swarm
+python3.11 -m venv .venv && source .venv/bin/activate
+python -m pip install -e ".[dev]"
+python -m eudis_swarm.simulation
+```
+
+On Windows PowerShell, substitute `py -3.11 -m venv .venv` and
+`.\.venv\Scripts\Activate.ps1`.
+
+That runs the baseline scenario: four UAVs, twenty tasks, one UAV made silent
+and immobile at `t=4.00 s`. The swarm detects the failure at `t=5.75 s`,
+releases the orphaned task, reassigns it, and completes all twenty tasks at
+`t=17.25 s` with `Human interventions: 0`.
+
+## The result that matters
+
+Identical mission inputs, one flag different — the allocation policy:
+
+```bash
+python -m eudis_swarm.simulation --seed 1 --failure-time 100 --communication-range 35 --allocation-policy distance
+python -m eudis_swarm.simulation --seed 1 --failure-time 100 --communication-range 35 --allocation-policy connectivity
+```
+
+| Result | Distance-greedy | Connectivity-aware |
+| --- | ---: | ---: |
+| Tasks completed | `20 / 20` | `20 / 20` |
+| Mission duration | **`12.00 s`** | `17.25 s` |
+| Isolation events | `4` | **`1`** |
+| Link losses / restorations | `4 / 5` | `5 / 8` |
+
+Both finish the mission. One finishes faster; the other keeps the swarm
+connected. **Neither of those points was chosen** — they fall out of how each
+policy ranks candidates, and there is currently no way to ask for a point
+between them. Closing that gap is the active line of work; see the
+[roadmap](#roadmap).
+
+The connectivity-aware policy reaches its decision using only each UAV's own
+`FRESH` peer snapshots, delivered over active one-hop links. It never reads
+another UAV's authoritative position — the knowledge boundary is enforced, not
+assumed.
+
+## Where to go next
+
+| If you want to | Read |
+| --- | --- |
+| See the swarm move | [`docs/visualization_layer.md`](docs/visualization_layer.md) — trace playback dashboard |
+| Understand failure recovery | [`docs/prototype_0_1.md`](docs/prototype_0_1.md) |
+| Understand the comms graph | [`docs/prototype_0_2a.md`](docs/prototype_0_2a.md) |
+| Understand peer knowledge | [`docs/prototype_0_2b.md`](docs/prototype_0_2b.md) |
+| Understand the allocator | [`docs/prototype_0_3a.md`](docs/prototype_0_3a.md) |
+| Contribute | [`CONTRIBUTING.md`](CONTRIBUTING.md) |
+| Know what this cannot do | [Current limitations](#current-limitations) — read this one |
+
+## Scope and intent
+
+> **This is a simulation, and it is not flight software.** The prototypes are
+> algorithmic two-dimensional point-mass models. The distance threshold and
+> instantaneous one-hop state delivery are deliberate abstractions, not RF
+> propagation or network-protocol results. There is no flight dynamics, radio,
+> network transport, autopilot, sensor, collision-avoidance, or safety-critical
+> modelling of any kind, and nothing here may be deployed on a real vehicle.
+> The [Current limitations](#current-limitations) section is exhaustive and
+> deliberately unflattering — please read it before drawing conclusions.
+
+Built for the [EUDIS Defence Hackathon 2026](https://eudis-hackathon.eu/)
+(Autumn Edition), Swarm Coordination challenge. The repository contains
+incremental prototypes, each adding one capability while preserving every
+earlier documented result:
+
+- **Prototype 0.1** — detects one fail-stop UAV, releases its unfinished task,
+  reallocates it, and finishes the mission without human intervention.
+- **Prototype 0.2A** — an explicit, time-varying communications graph and a
+  deterministic outage/restoration experiment, observational only.
+- **Prototype 0.2A.1** — hardened configuration, logical time, mission
+  lifecycle, invariant testing, and automated quality checks.
+- **Prototype 0.2B** — active one-hop links deliver immutable state snapshots
+  into receiver-local `UNKNOWN` / `FRESH` / `STALE` peer views.
+- **Prototype 0.3A** — an optional connectivity-aware allocator that evaluates
+  task endpoints using each UAV's own `FRESH` peer snapshots.
 
 ## What Prototype 0.1 still demonstrates
 
@@ -475,3 +575,34 @@ timestamp, selected IDs, distance, policy, degree, and isolation prediction.
 - **Prototype 0.5 — planned:** distributed ROS 2 implementation.
 - **Prototype 0.6 — planned:** ArduPilot multi-UAV SITL integration.
 - **Prototype 1.0 — planned:** EUDIS demonstration baseline.
+
+## Working agreement
+
+Development is currently closed to the core team. The working agreement,
+architectural boundaries that must be preserved, and the local quality baseline
+are documented in [`CONTRIBUTING.md`](CONTRIBUTING.md). The short version: every
+published number in this README is regression-tested, and a change that moves
+one must say so explicitly.
+
+If you have spotted a correctness defect, a report is genuinely welcome — see
+[`SECURITY.md`](SECURITY.md) for what to include.
+
+## Copyright and use
+
+**Copyright 2026 Charalampos Nadiotis. All rights reserved.**
+
+This repository is published for review only. It carries **no open-source
+licence**, and no licence is granted or implied by its visibility. You may not
+use, copy, modify, distribute, or create derivative works from this code, in
+whole or in part, without prior written permission from the copyright holder.
+
+This repository is expected to become private. Enquiries about access or use:
+charalamposnadiotis44@gmail.com
+
+## Not flight software
+
+This repository models UAV coordination algorithmically. It contains no
+autopilot, guidance, navigation, control, targeting, or safety-critical
+functionality, and no interface to any real vehicle, radio, or autopilot stack.
+It must not be deployed on, integrated into, or used to command any real
+vehicle. See [Current limitations](#current-limitations).

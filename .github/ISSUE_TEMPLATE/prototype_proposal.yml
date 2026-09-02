@@ -1,0 +1,48 @@
+name: Prototype or capability proposal
+description: Propose new swarm behaviour, a new allocation policy, or a roadmap milestone
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Prototypes in this repository are deliberately incremental: each one adds
+        a single capability and preserves every earlier documented result.
+
+  - type: textarea
+    id: capability
+    attributes:
+      label: Capability
+      description: What can the swarm do after this that it cannot do today?
+    validations:
+      required: true
+
+  - type: textarea
+    id: boundaries
+    attributes:
+      label: Boundaries preserved
+      description: >-
+        Which existing separations does this respect? Physical vs communication
+        state, proposal vs authority, local vs global knowledge, observation vs
+        behaviour. If it breaks one, say which and why.
+    validations:
+      required: true
+
+  - type: textarea
+    id: measurement
+    attributes:
+      label: How it will be measured
+      description: >-
+        The deterministic experiment that demonstrates it, and the baseline it
+        is compared against on identical inputs.
+    validations:
+      required: true
+
+  - type: textarea
+    id: regressions
+    attributes:
+      label: Expected effect on published results
+      description: >-
+        Which README figures change, if any? "None" is a valid and preferred
+        answer.
+    validations:
+      required: true

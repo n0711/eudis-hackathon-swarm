@@ -8,8 +8,35 @@ version = "0.3.0a0"
 description = "Deterministic resilience and communication-topology simulation for a multi-UAV swarm"
 readme = "README.md"
 requires-python = ">=3.11"
-authors = [{ name = "n0711" }]
+authors = [{ name = "Charalampos Nadiotis", email = "charalamposnadiotis44@gmail.com" }]
+keywords = [
+    "swarm",
+    "uav",
+    "multi-agent",
+    "task-allocation",
+    "communications-aware",
+    "resilience",
+    "simulation",
+    "defence",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Typing :: Typed",
+]
 dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/n0711/eudis-swarm"
+Repository = "https://github.com/n0711/eudis-swarm"
+Issues = "https://github.com/n0711/eudis-swarm/issues"
+Changelog = "https://github.com/n0711/eudis-swarm/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
 dev = [
