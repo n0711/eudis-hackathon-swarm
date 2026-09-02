@@ -104,7 +104,8 @@ class Agent:
         """Advance toward a target using a constant-speed point update."""
 
         elapsed = validate_timestamp(elapsed, previous=0.0, name="elapsed")
-        if not self.responsive or self.status is AgentStatus.FAILED:
+        # a UAV its peers wrongly believe is dead keeps flying.
+        if not self.responsive:
             return
 
         distance = self.distance_to(target)
@@ -121,7 +122,8 @@ class Agent:
         """Return a state snapshot, or nothing after a physical failure."""
 
         timestamp = validate_timestamp(timestamp, previous=self.last_heartbeat)
-        if not self.responsive or self.status is AgentStatus.FAILED:
+        # being declared failed does not silence a radio that still works.
+        if not self.responsive:
             return None
         self.last_heartbeat = timestamp
         return Heartbeat(
@@ -136,14 +138,24 @@ class Agent:
         """Make the UAV silent and immobile without declaring it failed."""
 
         timestamp = validate_timestamp(timestamp, previous=self.last_heartbeat)
-        if not self.responsive or self.status is AgentStatus.FAILED:
+        if not self.responsive:
             return False
         self.responsive = False
         self.failure_injected_at = timestamp
         return True
 
     def declare_failed(self) -> None:
-        """Apply world-state failure after a quorum-backed declaration."""
+        """Record the swarm's belief that this UAV has failed.
 
-        self.responsive = False
+        A declaration is evidence, not a kill switch.  It never touches
+        ``responsive``: if the quorum was wrong the vehicle keeps flying,
+        keeps transmitting, and keeps the task it does not know it lost.
+        """
+
         self.status = AgentStatus.FAILED
+
+    @property
+    def wrongly_declared(self) -> bool:
+        """Whether the swarm believes this UAV is dead while it is still flying."""
+
+        return self.status is AgentStatus.FAILED and self.responsive

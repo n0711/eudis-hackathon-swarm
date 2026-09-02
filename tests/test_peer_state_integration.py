@@ -41,13 +41,15 @@ def test_outage_stales_peer_views_and_costs_the_isolated_uav_its_work() -> None:
     assert metrics.orphaned_task_count == 1
     assert metrics.reassigned_task_count == 1
     assert isolated_agent.failure_injected_at is None
+    assert isolated_agent.responsive is True
+    assert metrics.belief_divergence_event_count == 1
+    assert metrics.duplicated_task_completion_count == 1
 
-    assert metrics.peer_messages_attempted == 126
-    assert metrics.peer_messages_delivered == 96
-    assert metrics.peer_messages_undelivered == 30
+    assert metrics.peer_messages_attempted == 144
+    assert metrics.peer_messages_delivered == 120
+    assert metrics.peer_messages_undelivered == 24
     assert metrics.peer_state_stale_transition_count == 6
-    # no refresh: UAV 2 is declared and stopped before its link is restored.
-    assert metrics.peer_state_refresh_transition_count == 0
+    assert metrics.peer_state_refresh_transition_count == 6
     assert metrics.maximum_simultaneous_stale_peer_observations == 6
 
     stale_events = [
@@ -61,9 +63,7 @@ def test_outage_stales_peer_views_and_costs_the_isolated_uav_its_work() -> None:
         if event.kind is PeerStateEventKind.REFRESHED
     ]
     assert {event.timestamp for event in stale_events} == {5.75}
-    # the link is restored at t=8.0, but the declared UAV no longer transmits,
-    # so no view is ever refreshed.
-    assert refresh_events == []
+    assert {event.timestamp for event in refresh_events} == {8.0}
     assert {
         (event.observer_agent_id, event.peer_agent_id) for event in stale_events
     } == {
@@ -74,15 +74,15 @@ def test_outage_stales_peer_views_and_costs_the_isolated_uav_its_work() -> None:
         (3, 2),
         (4, 2),
     }
-    # every observer is frozen on the last snapshot it heard before the outage.
+    # the link returns and fresh snapshots arrive again -- but the declaration
+    # certificate is never retracted, so the peers still believe UAV 2 is dead.
     assert result.peer_state_stores is not None
     for observer_agent_id in (1, 3, 4):
         store = result.peer_state_stores[observer_agent_id]
         observation = store.observation_for(2)
-        assert store.state_for(2) is PeerKnowledgeState.STALE
+        assert store.state_for(2) is PeerKnowledgeState.FRESH
         assert store.status_for(2) is PeerStatus.DECLARED_FAILED
         assert observation is not None
-        assert observation.snapshot.timestamp == 3.0
 
     # the minority of one never reaches quorum, so UAV 2 declares nobody.
     assert result.peer_state_stores[2].declared_failed_peer_ids == frozenset()

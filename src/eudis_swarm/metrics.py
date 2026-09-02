@@ -49,6 +49,8 @@ class SimulationMetrics:
     end_time: float | None = None
     mission_completed: bool = False
     human_interventions: int = 0
+    duplicated_task_completion_count: int = 0
+    belief_divergence_event_count: int = 0
     allocation_policy: str = "distance"
     connectivity_aware_assignment_count: int = 0
     predicted_isolation_assignment_count: int = 0
@@ -368,6 +370,8 @@ class SimulationMetrics:
             f"Orphaned tasks: {self.orphaned_task_count}",
             f"Tasks reassigned: {self.reassigned_task_count}",
             f"Recovered tasks: {self.recovered_task_count}",
+            f"Belief divergences: {self.belief_divergence_event_count}",
+            f"Duplicated completions: {self.duplicated_task_completion_count}",
             f"Simulation duration: {self.simulation_duration:.2f} s",
             "Failure detection latency: "
             + self._mean_or_na(list(self.failure_detection_latencies.values())),

@@ -30,6 +30,7 @@ class MissionEventKind(str, Enum):
     TASK_RELEASED = "TASK_RELEASED"
     TASK_REASSIGNED = "TASK_REASSIGNED"
     TASK_COMPLETED = "TASK_COMPLETED"
+    TASK_DUPLICATED = "TASK_DUPLICATED"
     MISSION_COMPLETED = "MISSION_COMPLETED"
     MISSION_TIMED_OUT = "MISSION_TIMED_OUT"
 
@@ -278,7 +279,18 @@ class Mission:
         ):
             raise RuntimeError("failed UAV/task ownership is inconsistent")
         task.release()
-        agent.release_task(task.task_id)
+        if agent.wrongly_declared:
+            # the UAV is unreachable, not dead.  It never hears the declaration,
+            # so it keeps the task while the coordinator hands the same work to
+            # somebody else.  Two owners now exist until the partition heals.
+            self.metrics.belief_divergence_event_count += 1
+            LOGGER.info(
+                "[DIVERGENCE] UAV %d still owns Task %d it was declared dead holding",
+                agent.agent_id,
+                task.task_id,
+            )
+        else:
+            agent.release_task(task.task_id)
         self.metrics.record_orphan(task.task_id, agent.agent_id, timestamp)
         self._event(
             MissionEventKind.TASK_RELEASED,
@@ -325,6 +337,24 @@ class Mission:
         timestamp = self._observe_time(timestamp)
         agent = self.agents[agent_id]
         task = self.tasks[task_id]
+        if agent.wrongly_declared:
+            # the coordinator believes this UAV is dead and cannot hear it, so
+            # the effort is real but invisible: duplicated, not completed.
+            agent.release_task(task_id)
+            self.metrics.duplicated_task_completion_count += 1
+            self._event(
+                MissionEventKind.TASK_DUPLICATED,
+                timestamp,
+                agent_id=agent_id,
+                task_id=task_id,
+                position=agent.position,
+            )
+            LOGGER.info(
+                "[DUPLICATE] UAV %d finished Task %d while believed dead",
+                agent_id,
+                task_id,
+            )
+            return
         task.complete(agent_id)
         agent.complete_task(task_id)
         self.metrics.record_task_completion(task_id, timestamp)
@@ -360,6 +390,11 @@ class Mission:
 
         active_task_ids: set[int] = set()
         for agent in self.agents.values():
+            if agent.wrongly_declared:
+                # a partitioned UAV may hold work the coordinator reassigned.
+                # That divergence is the phenomenon under study, not a defect,
+                # and it is resolved by the ownership layer on reconnection.
+                continue
             if agent.status is AgentStatus.FAILED and agent.current_task is not None:
                 raise RuntimeError("a failed UAV still owns a task")
             if agent.current_task is None:
@@ -383,5 +418,7 @@ class Mission:
                 if task.assigned_agent is None:
                     raise RuntimeError("an assigned task has no owner")
                 owner = self.agents[task.assigned_agent]
+                if owner.wrongly_declared:
+                    continue
                 if owner.current_task != task.task_id:
                     raise RuntimeError("task/agent ownership links do not match")

@@ -210,10 +210,15 @@ class Simulation:
 
     def _advance_agents(self, elapsed: float) -> None:
         for agent in self.mission.ordered_agents:
+            # a wrongly declared UAV is still flying its task: the coordinator's
+            # belief does not reach the vehicle.
             if (
-                agent.status is not AgentStatus.ACTIVE
-                or agent.current_task is None
+                agent.current_task is None
                 or not agent.responsive
+                or (
+                    agent.status is not AgentStatus.ACTIVE
+                    and not agent.wrongly_declared
+                )
             ):
                 continue
             task = self.mission.tasks[agent.current_task]
@@ -249,10 +254,15 @@ class Simulation:
     def _complete_arrivals(self, timestamp: float) -> int:
         completed = 0
         for agent in self.mission.ordered_agents:
+            # a wrongly declared UAV is still flying its task: the coordinator's
+            # belief does not reach the vehicle.
             if (
-                agent.status is not AgentStatus.ACTIVE
-                or agent.current_task is None
+                agent.current_task is None
                 or not agent.responsive
+                or (
+                    agent.status is not AgentStatus.ACTIVE
+                    and not agent.wrongly_declared
+                )
             ):
                 continue
             task = self.mission.tasks[agent.current_task]

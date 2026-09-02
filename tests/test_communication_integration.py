@@ -371,3 +371,72 @@ def test_communication_cli_arguments_are_wired(monkeypatch: pytest.MonkeyPatch) 
     assert captured["config"].comm_fault_end == 2.75
     assert captured["config"].peer_state_stale_after == 3.5
     assert captured["config"].allocation_policy == "connectivity"
+
+
+def test_a_wrongly_declared_uav_keeps_flying_and_duplicates_the_work() -> None:
+    """A declaration is belief, and belief does not reach the vehicle.
+
+    UAV 2 is jammed from t=4 to t=8 and never physically harmed.  Its peers
+    reach quorum and declare it dead, so the coordinator hands its task to
+    somebody else.  UAV 2 hears none of this: it keeps flying, keeps
+    transmitting, and finishes the task anyway.  Two UAVs do the same work and
+    the swarm pays for it twice.
+    """
+
+    result = Simulation(
+        SimulationConfig(
+            failure_time=100.0,
+            communication_range=130.0,
+            comm_fault_agent_id=2,
+            comm_fault_start=4.0,
+            comm_fault_end=8.0,
+        )
+    ).run()
+    metrics = result.metrics
+    agent = result.mission.agents[2]
+
+    # the swarm believes UAV 2 is dead...
+    assert agent.status is AgentStatus.FAILED
+    assert metrics.failed_agent_count == 1
+
+    # ...while the vehicle is untouched and still airborne.
+    assert agent.responsive is True
+    assert agent.failure_injected_at is None
+    assert agent.wrongly_declared is True
+
+    # the coordinator reassigned work UAV 2 never let go of.
+    assert metrics.belief_divergence_event_count == 1
+    assert metrics.orphaned_task_count == 1
+    assert metrics.reassigned_task_count == 1
+
+    # UAV 2's effort is real but invisible: nobody could hear it report.
+    assert metrics.duplicated_task_completion_count == 1
+    duplicated = [
+        event
+        for event in result.mission.events
+        if event.kind is MissionEventKind.TASK_DUPLICATED
+    ]
+    assert [event.agent_id for event in duplicated] == [2]
+
+    # the mission still finishes, having done twenty tasks' work plus one.
+    assert metrics.mission_completed is True
+    assert metrics.completed_task_count == 20
+
+
+def test_a_physically_dead_uav_stops_and_releases_its_work() -> None:
+    """The genuine fail-stop path is unchanged by the belief/truth split."""
+
+    result = Simulation(SimulationConfig()).run()
+    metrics = result.metrics
+    agent = result.mission.agents[2]
+
+    assert agent.responsive is False
+    assert agent.failure_injected_at == 4.0
+    assert agent.wrongly_declared is False
+    assert agent.current_task is None
+
+    # a real failure produces no divergence and no duplicated effort.
+    assert metrics.belief_divergence_event_count == 0
+    assert metrics.duplicated_task_completion_count == 0
+    assert metrics.simulation_duration == 17.25
+    assert metrics.completed_task_count == 20

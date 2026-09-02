@@ -398,6 +398,7 @@ def _mission_trace_event(
         MissionEventKind.FAILURE_INJECTED: "FAILURE",
         MissionEventKind.HEARTBEAT_TIMEOUT: "FAILURE",
         MissionEventKind.FAILURE_DECLARED: "FAILURE",
+        MissionEventKind.TASK_DUPLICATED: "DIVERGENCE",
         MissionEventKind.TASK_RELEASED: "RECOVERY",
     }
     message = event.kind.value.replace("_", " ").title()

@@ -140,11 +140,12 @@ def test_stale_peer_state_under_the_connectivity_policy_still_loses_the_uav() ->
     assert result.metrics.orphaned_task_count == 1
     assert result.metrics.reassigned_task_count == 1
     assert result.metrics.peer_state_stale_transition_count == 6
-    # nothing refreshes: the declared UAV is stopped before its link returns.
-    assert result.metrics.peer_state_refresh_transition_count == 0
-    # the world stops a physically healthy UAV because its peers voted it dead.
-    assert result.mission.agents[2].responsive is False
+    assert result.metrics.peer_state_refresh_transition_count == 6
+    # the declaration is belief only: the vehicle is untouched and still flying.
+    assert result.mission.agents[2].responsive is True
+    assert result.mission.agents[2].wrongly_declared is True
     assert result.mission.agents[2].failure_injected_at is None
+    assert result.metrics.duplicated_task_completion_count == 1
     assert {
         MissionEventKind.FAILURE_DECLARED,
         MissionEventKind.TASK_RELEASED,

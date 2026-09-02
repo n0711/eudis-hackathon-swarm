@@ -75,8 +75,7 @@ def test_outage_trace_separates_physical_health_from_local_staleness() -> None:
     assert stale_frame.metrics.stale_peer_observations == 6
 
     restored_frame = next(frame for frame in trace.frames if frame.timestamp == 8.0)
-    # the link returns but the declared UAV is stopped, so the views stay stale.
-    assert restored_frame.metrics.stale_peer_observations == 6
+    assert restored_frame.metrics.stale_peer_observations == 0
     assert (
         len(
             next(
