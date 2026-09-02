@@ -24,7 +24,9 @@ COMMUNICATION LOSS != UAV FAILURE
 Physical state (`IDLE` / `ACTIVE` / `FAILED`), network reachability,
 receiver-local snapshot freshness (`UNKNOWN` / `FRESH` / `STALE`), and
 receiver-local peer status (`HEARD` / `SILENT` / `UNREACHABLE` /
-`DECLARED_FAILED`) are separate dimensions. A peer becomes
+`DECLARED_FAILED`) are separate dimensions. Receiver-local task ownership adds
+`UNCLAIMED`, `OWNED_BY_SELF`, fresh/stale peer ownership, `CONTESTED`, and
+terminal `COMPLETE` without copying authoritative task state. A peer becomes
 `DECLARED_FAILED` only through the graph-mediated vote-and-quorum protocol, not
 because a heartbeat went missing.
 
@@ -40,7 +42,7 @@ demonstrable.
 | | |
 | --- | --- |
 | Runtime dependencies | **None** — Python standard library only |
-| Tests | **117** passing, **89.26%** branch coverage |
+| Tests | **179** passing, **89.12%** branch coverage |
 | Type checking | Pyright, zero errors |
 | Determinism | Bit-reproducible across machines and Python 3.11–3.13 |
 
@@ -95,7 +97,7 @@ global tasks.
 
 | If you want to | Read |
 | --- | --- |
-| Understand the current state boundary | [`docs/distributed_state_foundation.md`](docs/distributed_state_foundation.md) — world truth, local belief, delivery, quorum, and ownership vocabulary |
+| Understand the current state boundary | [`docs/distributed_state_foundation.md`](docs/distributed_state_foundation.md) — world truth, local belief, delivery, quorum, claim leases, and reconciliation |
 | See the swarm move | [`docs/visualization_layer.md`](docs/visualization_layer.md) — trace playback dashboard |
 | Understand failure recovery | [`docs/prototype_0_1.md`](docs/prototype_0_1.md) |
 | Understand the comms graph | [`docs/prototype_0_2a.md`](docs/prototype_0_2a.md) |
@@ -130,27 +132,30 @@ earlier documented result:
   into receiver-local `UNKNOWN` / `FRESH` / `STALE` peer views.
 - **Prototype 0.3A** — an optional connectivity-aware allocator that evaluates
   task endpoints using each UAV's own `HEARD` peer snapshots.
-- **Distributed-state foundation (current)** — graph-delivered heartbeats,
+- **Distributed-state foundation** — graph-delivered heartbeats,
   receiver-local link/status evidence, quorum-backed failure declarations,
   link-level partitions, and a locked task-ownership vocabulary.
+- **Distributed task ownership (current)** — immutable graph-delivered claims,
+  owner-scoped renewals, receiver-local leases, visible split-brain,
+  deterministic reconciliation, losing release, and monotonic completion.
 
-## Current milestone: distributed-state foundation
+## Current milestone: distributed task ownership
 
-The current milestone enforces a strict separation between world truth, agent
-belief, and observer-only evaluation. Heartbeats, failure votes, and failure
-declarations now use the modeled one-hop communication path; `Mission` applies
-a physical failure transition only after a local detector replica has formed a
-valid declaration from its own vote and votes delivered into its mailbox.
+Milestone 2 adds one `TaskClaimStore` per participating UAV. Each store derives
+its six-state task interpretation only from local claims and graph-delivered
+claim, release, and completion values; it never reads authoritative `Task`,
+remote `Agent`, or `Mission` ownership.
 
-The communication graph also accepts canonical undirected `blocked_links`, so
-two healthy sub-swarms such as `{1,2}` and `{3,4}` can continue operating while
-all cross-component traffic is cut. `TaskOwnershipState` defines the six local
-ownership meanings needed by a later claims protocol without pretending that
-leases or reconciliation already exist.
+Claims become stale after the freshness threshold but remain lease-valid until
+the later lease boundary. Renewals advance an owner-scoped per-task epoch;
+epochs suppress old messages from the same owner but are never compared across
+owners. When incompatible current owners meet after a partition, every local
+replica selects the lowest owner ID from protocol evidence alone. The losing
+owner stops acting and publishes an exact-claim release tombstone.
 
 See [Distributed-state foundation](docs/distributed_state_foundation.md) for the
-information-flow boundary, state semantics, scheduler order, and deliberate
-limitations.
+information-flow boundary, EFSM, exact boundary conditions, reconciliation
+rule, deterministic 2+2 lifecycle, and deliberate limitations.
 
 ## What Prototype 0.1 still demonstrates
 
@@ -279,27 +284,31 @@ policy, knowledge boundary, measured comparison, and limitations.
 | Module | Responsibility |
 | --- | --- |
 | `agent.py` | World-level UAV state, constant-speed 2D movement, and immutable heartbeat creation |
-| `task.py` | Authoritative `TaskStatus`, exact six-state local ownership vocabulary, and evidence classifier |
+| `task.py` | Authoritative `TaskStatus`, exact six-state local ownership vocabulary, and legacy heartbeat classifier |
+| `task_claims.py` | Immutable claim/release/completion evidence and one receiver-local lease/reconciliation machine |
 | `task_allocator.py` | Centralized distance baseline and local-snapshot-aware connectivity reference policy |
 | `failure_manager.py` | Isolated local vote mailboxes, strict-timeout suspicion, quorum validation, and declarations |
 | `communication.py` | Undirected distance/link fault policy, canonical `blocked_links`, topology, and transitions |
-| `messaging.py` | One-hop delivery of heartbeats, failure votes, declarations, and local link evidence |
+| `messaging.py` | One-hop delivery of heartbeats, failure evidence, task claims/releases/completions, and local link evidence |
 | `peer_state.py` | Receiver-local observations, freshness, link evidence, peer status, and applied declarations |
 | `mission.py` | Authoritative world mutation after proposals/declarations, events, and invariants |
 | `simulation.py` | Scenario generation, logical clock, physics, fault scheduling, delivery, and protocol orchestration |
-| `simulation_events.py` | Structured communication and peer-knowledge event types |
+| `simulation_events.py` | Structured communication, peer-knowledge, and task-claim event types |
 | `metrics.py` | Separate physical-mission and network metrics derived from transitions |
 | `config.py` | Validated physical and communication configuration |
 | `validation.py` | Shared finite, monotonic logical-time and identifier validation |
 | `trace.py` | Immutable playback frames, event explanations, and versioned JSON serialization |
+| `task_claim_trace.py` | Observer-only agent-by-task ownership traces with no authoritative task fields |
+| `task_claim_demo.py` | Deterministic `{1,2}` / `{3,4}` split-brain, reconnect, reconciliation, and continuation scenario |
 | `dashboard_app.py` | Local Streamlit/Plotly mission playback and debugging dashboard |
 | `visualization.py` | Legacy optional final matplotlib debugging view |
 
 Allocators only propose assignments; `Mission` applies them and checks
-bidirectional ownership. The optional 0.3A policy reads receiver-local peer
-stores, but neither allocator mutates agents or tasks directly. Both allocation
-policies remain centralized reference mechanisms; distributed claims and
-partition reconciliation are deliberately deferred.
+bidirectional world ownership. The optional 0.3A policy reads receiver-local
+peer stores, but neither allocator mutates agents or tasks directly. Both
+allocation policies remain centralized reference mechanisms and do not resolve
+distributed claim conflicts; the new ownership protocol is a separate local
+belief/action layer for a later distributed allocator.
 
 ## Requirements and installation
 
@@ -365,6 +374,31 @@ timeline, and a structured event log. See
 [`docs/visualization_layer.md`](docs/visualization_layer.md) for panel semantics
 and acceptance-scenario commands. The existing `--visualize` option remains a
 legacy final-frame matplotlib debugging view.
+
+### Distributed task-claim demonstration
+
+Run the receiver-local ownership scenario directly and optionally record its
+standalone belief trace:
+
+```console
+python -m eudis_swarm.task_claim_demo
+python -m eudis_swarm.task_claim_demo --record-trace task-claims.trace.json
+```
+
+The deterministic run starts connected, cuts the four cross-links that form
+`{1,2}` and `{3,4}`, and lets the isolated right component age its Task 19
+evidence from fresh to stale and then strictly beyond the lease. UAV 4 can then
+claim Task 19 legitimately while UAV 1 still owns and renews it on the left.
+After reconnection, all four local stores visibly enter `CONTESTED`; each
+independently selects UAV 1, UAV 4 releases its exact losing generation, and
+then UAV 4 claims Task 29 to prove work continues without a restart.
+
+The JSON trace contains ten strictly increasing stages. Every stage includes
+the active graph, components, and every agent-by-task local view with known
+claims, receipt-time age, freshness, epoch, contested flag, reconciliation
+winner, release tombstones, and completion evidence. It deliberately contains
+no authoritative `Task.assigned_agent` field that could be mistaken for agent
+belief.
 
 ### Prototype 0.3A policy comparison
 
@@ -533,8 +567,12 @@ Coverage includes the preserved allocation and fail-stop recovery tests plus:
   delivered;
 - proof that silence and link loss cannot directly produce
   `DECLARED_FAILED`, while delivered vote quorum can;
-- exact receiver-local task ownership vocabulary, including stale claims and
-  contention; and
+- exact receiver-local task ownership vocabulary, including strict fresh,
+  stale-valid, and lease-expired boundaries;
+- graph-gated claim propagation, legitimate 2+2 split-brain, visible
+  `CONTESTED`, order-independent convergence, and losing release;
+- duplicate/old-message safety, monotonic completion, authoritative-state
+  isolation, and scale tests with six noncontiguous UAV IDs; and
 - deterministic baseline-versus-connectivity decision and outcome comparison.
 
 ### Six-agent smoke scenario
@@ -605,7 +643,16 @@ timestamp, selected IDs, distance, policy, degree, and isolation prediction.
 - Agents remain point masses without aircraft dynamics, vehicle constraints,
   terrain, collision avoidance, or energy limits.
 - Tasks remain independent points. Both policies are centralized greedy pairing,
-  not joint trajectory prediction or global optimization.
+  not joint trajectory prediction or global optimization. The task-claim EFSM
+  is a distributed ownership foundation, not yet a distributed task-utility or
+  bidding algorithm, and it is not wired into authoritative mission movement.
+- Claim delivery is deterministic, instantaneous, and one-hop over the modeled
+  graph. The protocol assumes non-Byzantine participants with stable validated
+  IDs; it does not authenticate messages, tolerate identity forgery, or prove
+  that a remote claimant followed the local epoch-advance rule.
+- Owner-scoped epochs order only one owner's publications. Cross-owner conflicts
+  deliberately choose the lowest owner ID as a transparent foundation rule,
+  not as an operationally optimal priority policy.
 - Physical failure injection still models one fail-stop UAV; there is no
   rejoin, intermittent, Byzantine, or simultaneous-failure model.
 - The optional visualization is a final debugging view, not a live dashboard or
@@ -626,9 +673,12 @@ timestamp, selected IDs, distance, policy, degree, and isolation prediction.
 - **Distributed-state foundation — implemented:** delivered heartbeat and link
   evidence, receiver-local peer status, quorum-backed declarations, link-level
   partitions, and the six-state task-ownership seam.
-- **Later Prototype 0.3 milestones — planned:** communications-aware path
-  planning, relay, task claims/leases/epochs, partition reconciliation, and
-  distributed allocation experiments.
+- **Distributed task ownership — implemented:** immutable claims, distinct
+  freshness/lease thresholds, owner-scoped epochs, split-brain, deterministic
+  reconciliation, losing release, terminal completion, and belief-only trace.
+- **Later Prototype 0.3 milestones — planned:** a distributed allocator or
+  bidding layer that creates claim intents, plus communications-aware path
+  planning, relay, and comparative allocation experiments.
 - **Prototype 0.4 — planned:** QUBO / quantum-simulated optimization experiments.
 - **Prototype 0.5 — planned:** distributed ROS 2 implementation.
 - **Prototype 0.6 — planned:** ArduPilot multi-UAV SITL integration.

@@ -29,6 +29,19 @@ and interfaces change between prototypes.
   observations only.
 - A newcomer-oriented distributed-state architecture guide covering world
   truth, agent belief, observer access, scheduling, and deferred work.
+- Immutable task claims, exact-generation releases, and terminal completion
+  evidence with no authoritative `Agent` or `Task` references.
+- One `TaskClaimStore` per UAV with distinct freshness and lease boundaries,
+  owner-scoped renewal epochs, explicit `CONTESTED` reconciliation, replay
+  tombstones, voluntary release, and monotonic `COMPLETE`.
+- `TaskClaimTransport`, which routes ownership evidence only across active
+  one-hop `CommunicationGraph` links and records per-receiver delivery results.
+- A deterministic `{1,2}` / `{3,4}` split-brain demonstration in
+  `eudis_swarm.task_claim_demo`, including reconnect, unanimous reconciliation,
+  losing release, and continued work.
+- A standalone JSON claim trace containing every agent-by-task local view,
+  known claim age/freshness/version, contested state, winner, releases, and
+  completion without authoritative ownership fields.
 
 ### Changed
 
@@ -48,6 +61,9 @@ and interfaces change between prototypes.
   explicit link-level blocks without changing the existing API defaults.
 - `HeartbeatTimeout` remains available as an import-compatible alias for the
   now-explicit `FailureDeclaration` semantics.
+- The distributed-state guide now specifies the task-ownership EFSM, strict
+  stale-versus-expired boundary, owner-local epoch meaning, deterministic
+  cross-owner rule, and absorbing completion semantics.
 
 ### Fixed
 

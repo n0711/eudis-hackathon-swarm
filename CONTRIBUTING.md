@@ -48,8 +48,8 @@ refactor, and needs discussion first.
 | World truth vs agent belief | Physics, authoritative positions, global tasks, and topology belong to the simulation. An agent-local component may use self state and delivered/local evidence only. |
 | Physical vs communication state | `IDLE`/`ACTIVE`/`FAILED` never derives directly from link state. `SILENT`, `UNREACHABLE`, `STALE`, and `UNKNOWN` must never imply `FAILED`. |
 | Silence vs declaration | A timeout may create a local `FailureVote`; only a validated quorum in one replica's mailbox may create `DECLARED_FAILED` and authorize recovery. |
-| Emission vs delivery | Creating a heartbeat, vote, or declaration is not delivery. Remote state changes must pass through `PeerStateTransport` and an available modeled link. |
-| Task truth vs ownership evidence | `TaskStatus` is authoritative world state. Agent-local code uses only the six `TaskOwnershipState` values and must treat a stale peer claim as evidence, not as unclaimed work. |
+| Emission vs delivery | Creating a heartbeat, vote, declaration, claim, release, or completion is not remote delivery. Remote state changes must pass through the appropriate modeled transport and an available link. |
+| Task truth vs ownership evidence | `TaskStatus` is authoritative world state. `TaskClaimStore` derives only the six `TaskOwnershipState` values from local protocol evidence; stale remains owned until strict lease expiry. |
 | Proposal vs authority | Allocators propose `Allocation` records. Only `Mission` mutates agents and tasks. |
 | Local vs global knowledge | An allocator reading peer state may read only the deciding UAV's own store, never another UAV's authoritative position. |
 | Observation vs behaviour | Metrics and traces are derived from transitions. They never feed decisions back into the simulation. |
@@ -82,6 +82,19 @@ consequence is applied only once.
 World truth may decide whether a UAV's software can execute, but inactive
 software must not mutate its private freshness or link-evidence state. That
 execution gate must not reveal physical health to any other replica.
+
+Task-claim epochs are scoped to one `(task_id, owner_agent_id)` publication
+stream and must never be compared across owners. A local store advances only
+its own stream by exactly one on creation or renewal; a larger remote-owner
+epoch cannot buy cross-owner priority. Reconciliation first supersedes older
+publications per owner and then selects the lowest validated owner ID, using no
+`Mission`, live remote `Agent`, or authoritative `Task` field.
+
+Keep claim receipt and reconciliation as separate observable boundaries. A
+losing owner must stop acting from its own reconciliation result and publish an
+exact-generation release tombstone through `TaskClaimTransport`; do not erase
+every receiver's losing evidence from a central loop. Completion is receiver
+local and absorbing once valid evidence is accepted.
 
 For the complete rationale and state vocabulary, read
 [`docs/distributed_state_foundation.md`](docs/distributed_state_foundation.md)

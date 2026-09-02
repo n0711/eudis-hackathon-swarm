@@ -1,6 +1,7 @@
-"""Mission task world state and receiver-local ownership classification.
+"""Define authoritative mission tasks and the exact local ownership vocabulary.
 
-The local vocabulary is evidence-based and does not implement leases or reconciliation.
+The legacy heartbeat classifier remains a compatibility helper, while the formal
+lease and reconciliation state machine lives in the pointer-free claim protocol.
 """
 
 from __future__ import annotations
@@ -40,10 +41,11 @@ def classify_task_ownership(
     peer_state_store: PeerStateStore,
     known_completed_task_ids: Collection[int] = (),
 ) -> TaskOwnershipState:
-    """Classify a task without consulting authoritative peer or task state.
+    """Classify legacy heartbeat evidence without consulting authoritative state.
 
-    Completion evidence is terminal. Otherwise, multiple observed claimant IDs are
-    contested, while no locally available claim evidence means locally unclaimed.
+    Completion evidence is terminal, and multiple observed claimant IDs are
+    contested. New distributed decisions should use ``TaskClaimStore`` because
+    heartbeats do not carry formal claim epochs, leases, or release evidence.
     """
 
     task_id = validate_positive_integer(task_id, name="task_id")

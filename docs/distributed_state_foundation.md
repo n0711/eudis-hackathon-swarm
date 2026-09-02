@@ -1,9 +1,9 @@
 # Distributed-state foundation
 
-This milestone separates what the simulation knows from what each UAV can
-legitimately know. It also gives newcomers one place to understand how network
-delivery, peer status, failure declarations, and task-ownership evidence fit
-together.
+The distributed-state milestones separate what the simulation knows from what
+each UAV can legitimately know. This guide gives newcomers one place to
+understand how network delivery, peer status, failure declarations, and the
+receiver-local task-ownership protocol fit together.
 
 ## The boundary to preserve
 
@@ -14,7 +14,7 @@ shared pool of knowledge.
 | Layer | May contain | Must not do |
 | --- | --- | --- |
 | **World truth** | Physical `Agent` objects, actual positions, responsiveness, task records, and the current `CommunicationGraph` | Supply a remote UAV's live state directly to that UAV's decision logic |
-| **Agent belief** | One UAV's `PeerStateStore`, delivered `Heartbeat` snapshots, local link evidence, locally received failure votes/declarations, and local task evidence | Infer physical failure from silence or copy another UAV's authoritative `Agent`/`Task` state |
+| **Agent belief** | One UAV's `PeerStateStore`, delivered `Heartbeat` snapshots, local link evidence, locally received failure votes/declarations, and its own task-claim, release, and completion evidence | Infer physical failure from silence or copy another UAV's authoritative `Agent`/`Task` state |
 | **Observer/evaluation** | Metrics, traces, visualisation, assertions, and tests that compare belief with world truth | Feed its privileged view back into allocation or failure decisions |
 
 World truth is necessary. Physics must know where vehicles really are, the
@@ -181,7 +181,8 @@ assert graph.connected_components == (
 ```
 
 UAVs 1 and 2 can still exchange messages, as can UAVs 3 and 4. No heartbeat,
-vote, or declaration crosses between the two components. Calling
+vote, declaration, task claim, release, or completion evidence crosses between
+the two components. Calling
 `graph.update(positions)` later reconnects all otherwise available pairs
 without restarting the graph or mission.
 
@@ -189,7 +190,7 @@ The command-line fault schedule still models one whole-UAV communication
 outage. Link-level faults are currently a core `CommunicationGraph` API for
 deterministic tests and future scenario scheduling.
 
-## Task ownership: world state versus local evidence
+## Task ownership: world state versus local belief
 
 `TaskStatus` remains the authoritative mission lifecycle:
 
@@ -200,10 +201,11 @@ UNASSIGNED --assign--> ASSIGNED --complete--> COMPLETED
 ```
 
 That state is used by `Mission` to mutate and validate the simulated world. It
-is not an agent-relative ownership belief.
+is not an agent-relative ownership belief and it is not an input to distributed
+claim reconciliation.
 
-`TaskOwnershipState` is the exact local vocabulary for future distributed task
-decisions:
+`TaskOwnershipState` is the exact externally meaningful vocabulary for one
+UAV's local interpretation of a task:
 
 1. `UNCLAIMED`
 2. `OWNED_BY_SELF`
@@ -212,22 +214,225 @@ decisions:
 5. `CONTESTED`
 6. `COMPLETE`
 
-There is intentionally no `LEASE_UNKNOWN` state.
+There is intentionally no `LEASE_UNKNOWN` state. Lease validity and evidence
+freshness are internal evidence dimensions; they do not expand the public
+six-state vocabulary.
 
-`classify_task_ownership()` accepts the deciding UAV's own current task, its
-own `PeerStateStore`, and task IDs that it locally knows to be complete. It
-classifies peer claims only from delivered heartbeat snapshots:
+For receiver UAV `i` and task `j`, this guide uses two symbols:
 
-- one fresh peer claim becomes `CLAIMED_BY_PEER_FRESH`;
-- one stale peer claim remains `CLAIMED_BY_PEER_STALE` rather than disappearing;
-- a self claim becomes `OWNED_BY_SELF`;
-- multiple claimant IDs, including self plus a peer, become `CONTESTED`;
-- local completion evidence is terminal and becomes `COMPLETE`; and
-- no locally visible claim becomes `UNCLAIMED`.
+- `K_ij` is the complete receiver-local knowledge for that task: locally
+  created claims, graph-delivered peer claims, the latest accepted claim for
+  each owner, local receipt times, releases, reconciliation results, and any
+  accepted completion evidence.
+- `S_ij` is the six-state interpretation derived only from `K_ij`, the
+  receiver's own identity, and deterministic simulation time.
 
-`UNCLAIMED` means “this UAV currently has no claim evidence,” not “the observer
-has proved that nobody in the world owns the task.” The classifier does not
-implement claim publication, leases, epochs, stealing, or reconciliation.
+Neither `K_ij` nor `S_ij` contains or consults the authoritative `Task` owner or
+a remote live `Agent.current_task`. Consequently, two UAVs can legitimately
+hold different `K_ij` sets and report different `S_ij` values while a partition
+prevents evidence exchange.
+
+`UNCLAIMED` means “UAV `i` currently has no lease-valid claim evidence for task
+`j`,” not “nobody in the world owns the task.” `CLAIMED_BY_PEER_STALE` similarly
+means that old but still lease-valid evidence exists; it is not permission to
+take the task.
+
+## Immutable claim evidence
+
+A task claim is an immutable value message. Conceptually it identifies the
+task, its claiming owner, one deterministic claim identifier, that owner's
+per-task epoch, the configured lease information, and its creation time. It
+contains integer identifiers and other copied protocol values, never pointers
+or references to authoritative `Agent` or `Task` objects.
+
+Local creation places the same immutable value in the creator's `K_ij` that a
+peer would obtain after successful delivery. Peer knowledge changes only after
+the communication model delivers the value; there is no global broadcast or
+Mission-side loop that writes every store.
+
+Claims are retransmittable data. Receiving the identical claim more than once
+is idempotent and does not manufacture a renewal or extend its lease. Renewal
+always creates a new immutable claim with the next owner-scoped epoch.
+
+## Freshness, lease validity, and replacement
+
+Freshness and lease validity use two distinct positive thresholds:
+
+```text
+fresh_after < lease_duration
+```
+
+For a claim's receiver-local age `a`, measured from the first local acceptance
+of that exact immutable claim:
+
+| Exact condition | Evidence meaning |
+| --- | --- |
+| `0 <= a <= fresh_after` | Fresh and lease-valid |
+| `fresh_after < a <= lease_duration` | Stale but still lease-valid |
+| `a > lease_duration` | Lease-expired and no longer a current ownership candidate |
+
+The inequalities are intentional. A claim is still fresh exactly at
+`fresh_after`, and its lease is still valid exactly at `lease_duration`.
+Freshness changes only after the first boundary is crossed; replacement becomes
+eligible only after the second boundary is crossed.
+
+This gives `stale != invalid` a precise meaning. Missing one publication can
+make evidence older without immediately freeing a task. A local UAV may create
+a replacement claim only when the task is not locally `COMPLETE` and every
+known incompatible claim is lease-expired or explicitly released. It may renew
+its own current claim by creating the next immutable owner-scoped version.
+
+The protocol uses deterministic simulation time and local acceptance times; it
+does not sleep and does not compare wall clocks. A duplicate delivery retains
+the original local acceptance time. A genuinely new renewal receives its own
+acceptance time and therefore a new freshness and lease interval.
+
+## Owner-scoped epochs and safe delayed delivery
+
+Epochs are monotonic only within one `(task_id, owner_id)` stream. An owner
+advances its epoch exactly once whenever it locally creates the first claim or
+renews that task claim. Receiving, retransmitting, reconciling, or releasing a
+claim never increments another owner's epoch.
+
+Epochs from different owners are never compared. Owner 1 at epoch 8 is not
+intrinsically newer or better than owner 3 at epoch 2 because those counters
+describe independent histories. Cross-owner conflicts use the reconciliation
+rule below, not an invalid global ordering of local counters.
+
+A receiver accepts a gap in one owner's stream because intermediate renewals
+may have been dropped by the graph. The modeled transport attributes a message
+to its declared owner, and the local API is the only normal issuer; Byzantine
+identity forgery remains out of scope. Even a malformed participant that jumps
+to a large in-range epoch can suppress only its own older publications, never
+gain priority over another owner. Values outside the positive signed 64-bit
+range are rejected as impossible protocol versions.
+
+For a single owner, a higher accepted epoch supersedes every lower epoch for
+that task. The following safety rules apply before local state changes:
+
+- an exact duplicate is accepted idempotently and does not refresh age;
+- a delayed lower epoch cannot replace that owner's newer accepted epoch;
+- the same owner, task, and epoch with a different claim identity or immutable
+  payload is contradictory and is rejected safely;
+- non-positive or otherwise malformed versions are rejected;
+- evidence whose creation time is in the receiver's future is rejected; and
+- a release tombstone prevents a delayed copy of the released claim from
+  resurrecting ownership.
+
+These checks make arrival order irrelevant within an owner's claim stream
+without assuming synchronized clocks or treating a large counter from another
+owner as globally newer.
+
+## CONTESTED and deterministic reconciliation
+
+After selecting the latest accepted claim separately for each owner, two or
+more incompatible lease-valid owners make `S_ij = CONTESTED`. Freshness does not
+break the tie: a stale-but-lease-valid claim remains a real contender.
+
+Reconciliation is deterministic and uses only protocol evidence. From the set
+of latest lease-valid per-owner claims, the claim with the lowest numeric
+`owner_id` wins. Stable validated owner IDs provide a total ordering, so every
+UAV given the same claim set selects the same winner regardless of delivery or
+dictionary iteration order.
+
+Conflict handling is explicitly two-phase:
+
+1. **Observe conflict.** A receiver keeps all incompatible current claims and
+   reports `CONTESTED`. Receipt alone neither records a winner nor erases losing
+   evidence, which preserves an observable conflict boundary.
+2. **Reconcile and release.** Reconciliation records the winner and suppresses
+   the exact losing candidates in that receiver's interpretation. The local
+   state therefore leaves `CONTESTED`; a losing local claimant immediately
+   stops acting as owner and creates release evidence referencing its losing
+   claim and the selected winner. A release can be authored only while that
+   losing generation's local lease is valid. Releases then propagate through
+   normal graph delivery and retain tombstones against delayed replay.
+
+After reconciliation, the winner reports `OWNED_BY_SELF`; other receivers
+report `CLAIMED_BY_PEER_FRESH` or `CLAIMED_BY_PEER_STALE` according to their own
+local age. Claim receipt and reconciliation occur at distinct boundaries so a
+real `CONTESTED` frame remains observable before this transition. No
+authoritative `Mission` lookup or central arbitration participates in
+selection.
+
+## Monotonic completion
+
+Valid completion evidence is terminal for one receiver and task. Once accepted,
+it makes `S_ij = COMPLETE` and records a terminal marker in `K_ij`.
+
+The local API creates completion evidence only while its exact claim is
+`OWNED_BY_SELF` and lease-valid. The immutable completion carries that claim,
+and its source-local creation time must fall within the same claim generation's
+lease, making the evidence self-contained for later delivery.
+
+Later claims, renewals, conflicting owners, releases, expired leases,
+reconnection traffic, and duplicate or delayed messages cannot move that local
+state away from `COMPLETE`. Repeated delivery of the same completion evidence
+is idempotent. As with claims, future-dated or malformed completion evidence is
+rejected before it can change belief.
+
+Completion is graph-delivered belief, not an inference from the authoritative
+world task. Different components may therefore learn completion at different
+times, but every receiver that accepts it remains terminal thereafter.
+
+## Local ownership state transitions
+
+The compact transition diagram below describes the externally visible state;
+freshness, lease expiry, winner selection, and tombstones remain internal
+evidence details.
+
+```text
+UNCLAIMED --local valid claim----------------------> OWNED_BY_SELF
+UNCLAIMED --valid peer claim-----------------------> CLAIMED_BY_PEER_FRESH
+OWNED_BY_SELF --own release / lease expiry---------> UNCLAIMED
+OWNED_BY_SELF --incompatible valid claim-----------> CONTESTED
+CLAIMED_BY_PEER_FRESH --age > fresh_after----------> CLAIMED_BY_PEER_STALE
+CLAIMED_BY_PEER_FRESH --incompatible valid claim---> CONTESTED
+CLAIMED_BY_PEER_STALE --new peer epoch-------------> CLAIMED_BY_PEER_FRESH
+CLAIMED_BY_PEER_STALE --release / age > lease------> UNCLAIMED
+CLAIMED_BY_PEER_STALE --incompatible valid claim---> CONTESTED
+CONTESTED --reconciliation selects self------------> OWNED_BY_SELF
+CONTESTED --reconciliation selects peer------------> CLAIMED_BY_PEER_FRESH
+CONTESTED --reconciliation selects stale peer------> CLAIMED_BY_PEER_STALE
+ANY NON-COMPLETE STATE --valid completion evidence-> COMPLETE
+COMPLETE --any later ownership input---------------> COMPLETE
+```
+
+A stale claim does not follow the `UNCLAIMED` transition until its age is
+strictly greater than `lease_duration` or matching release evidence arrives.
+
+## Balanced 2+2 split-brain lifecycle
+
+The deterministic demonstration uses the existing four-agent topology without
+embedding a four-agent assumption in core protocol logic:
+
+1. UAVs `{1,2,3,4}` begin connected, and an initial claim reaches every local
+   store through modeled delivery.
+2. The cross-component links `(1,3)`, `(1,4)`, `(2,3)`, and `(2,4)` are blocked,
+   producing components `{1,2}` and `{3,4}` while preserving internal traffic.
+3. The original owner renews inside its own component. The other component
+   cannot receive that renewal; its older evidence first becomes stale, remains
+   unavailable for replacement through the exact lease boundary, and then
+   expires.
+4. After expiry, a UAV in the other component legitimately creates a replacement
+   claim from its own `K_ij`. Both components now have useful but incompatible
+   local ownership histories for the same task.
+5. Reconnection restores the cross links without resetting stores. Claims are
+   delivered normally, and receivers that know both current claims visibly
+   enter `CONTESTED`.
+6. At a separate deterministic reconciliation phase, each receiver selects the
+   lower owner ID from the same per-owner-superseded candidate set.
+7. The losing claimant stops acting as owner and publishes release evidence at
+   the next explicit release phase. Peers apply it idempotently and converge on
+   exactly one current owner.
+8. Subsequent protocol and mission boundaries continue without a restart;
+   delayed losing claims cannot resurrect the conflict, and accepted completion
+   remains terminal.
+
+The distinct observe, reconcile, and release phases are important for
+traceability. They let a trace show the real `CONTESTED` interval, the selected
+winner, and the later losing release instead of collapsing all three facts into
+one observer snapshot.
 
 ## Deterministic scheduler order
 
@@ -251,6 +456,14 @@ timestamp. At a normal event boundary, `Simulation.run()` performs:
 
 Metrics are recorded alongside the transition or delivery they measure, not
 deferred wholesale to step 11.
+
+Task ownership adds a separate deterministic evidence-flow contract. A protocol
+round first advances receiver-local claim age, then creates any locally allowed
+claim or renewal, routes immutable evidence through the current graph, and
+derives `S_ij`. A `CONTESTED` result is observed before a later reconciliation
+phase records a winner; a losing local owner creates release evidence only in
+the following explicit release phase. This ordering is protocol semantics, not
+permission for `Mission` to inspect every store and settle a conflict.
 
 A communication-only boundary stops after observation, metrics, and tracing; it
 does not add an allocation, completion, or failure-protocol tick. At startup,
@@ -281,22 +494,33 @@ failure-before-heartbeat ordering begins after startup.
 - Agent-local connectivity scoring uses the last delivered peer position only
   while that peer's complete local status is `HEARD`, never a live remote
   `Agent.position`.
-- A stale task claim remains a stale claim; it is not silently converted to
-  `UNCLAIMED`.
+- A stale but lease-valid task claim remains a stale claim; only explicit
+  release or strict lease expiry permits `UNCLAIMED`.
+- A repeated immutable claim does not refresh its age; only a new owner-scoped
+  epoch is a renewal.
+- Owner-scoped epochs supersede old claims from the same owner and are never
+  compared across different owners.
+- Given the same latest lease-valid claim per owner, every receiver selects the
+  lowest owner ID, independent of message arrival order.
+- Conflict observation, winner selection, and losing release remain explicit
+  phases, so `CONTESTED` is observable rather than transient hidden state.
+- Once a receiver accepts completion evidence, its state for that task remains
+  `COMPLETE` under every later claim, release, duplicate, or reconnection.
+- `Mission` may observe and apply world effects after distributed evidence
+  exists, but it may not arbitrate a task-claim conflict.
 - Metrics and trace code may compare belief with truth, but may not write belief
   or select an action.
 
 ## Deliberately deferred
 
-This milestone does not turn the existing allocator into a distributed task
-protocol. `TaskAllocator` and `CommunicationAwareTaskAllocator` remain
-centralized reference policies, and `Mission` remains the sole authority that
-applies their non-conflicting proposals. The local `TaskOwnershipState` seam is
-present so a later claims protocol can be added without inventing vocabulary at
-that point.
+This milestone establishes distributed ownership evidence, not a full
+distributed task allocator. `TaskAllocator` and
+`CommunicationAwareTaskAllocator` remain centralized reference policies for
+baseline comparison. CBBA, bidding, path planning, and global task-utility
+optimisation remain separate future work; none is needed to make claims,
+leases, split-brain, and reconciliation correct.
 
-Also deferred are task claim messages, leases, epochs, partition reconciliation,
-multi-hop routing and forwarding, queued/reliable heartbeat delivery,
+Also deferred are multi-hop routing and forwarding, queued/reliable delivery,
 acknowledgements, stochastic packet loss, asymmetric links, Byzantine behavior,
 agent rejoin, simultaneous failures, RF propagation, aircraft dynamics, ROS 2,
-MAVLink, ArduPilot, Gazebo, and quantum optimization.
+MAVLink, ArduPilot, Gazebo, 3D visualisation, and quantum optimization.
