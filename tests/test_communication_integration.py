@@ -27,7 +27,16 @@ def _mission_signature(
     ]
 
 
-def test_communication_outage_is_observational_and_restores_cleanly() -> None:
+def test_jamming_is_misread_as_failure_without_ownership_reconciliation() -> None:
+    """A jammed-but-healthy UAV is wrongly declared dead by a peer quorum.
+
+    This is the honest consequence of removing the link oracle.  Nothing local
+    distinguishes a jammed peer from a destroyed one, so the three connected
+    peers reach quorum on UAV 2 and the world releases its work.  Defending the
+    "communication loss != UAV failure" claim is the job of the distributed
+    ownership layer, not of privileged knowledge inside the detector.
+    """
+
     config = SimulationConfig(
         failure_time=100.0,
         communication_range=130.0,
@@ -43,39 +52,32 @@ def test_communication_outage_is_observational_and_restores_cleanly() -> None:
     assert metrics.mission_completed is True
     assert metrics.completed_task_count == 20
     assert metrics.simulation_duration == pytest.approx(11.75)
-    assert agent.responsive is True
-    assert agent.status is AgentStatus.IDLE
+    # UAV 2 was never physically harmed: no failure was ever injected into it.
     assert agent.failure_injected_at is None
-    assert agent.current_task is None
 
-    assert metrics.failed_agent_count == 0
-    assert metrics.orphaned_task_count == 0
-    assert metrics.reassigned_task_count == 0
-    assert metrics.recovered_task_count == 0
-    assert metrics.recoveries == {}
+    # ...yet the swarm declared it dead and took its work away.
+    assert metrics.failed_agent_count == 1
+    assert metrics.orphaned_task_count == 1
+    assert metrics.reassigned_task_count == 1
     assert result.mission.tasks[19].status is TaskStatus.COMPLETED
     assert result.mission.tasks[19].assigned_agent == 2
 
+    # the full physical-recovery path runs on a UAV that never physically failed.
     physical_recovery_kinds = {
-        MissionEventKind.HEARTBEAT_TIMEOUT,
         MissionEventKind.FAILURE_DECLARED,
         MissionEventKind.TASK_RELEASED,
         MissionEventKind.TASK_REASSIGNED,
     }
-    assert not any(
-        event.kind in physical_recovery_kinds for event in result.mission.events
-    )
+    fired = {event.kind for event in result.mission.events} & physical_recovery_kinds
+    assert fired == physical_recovery_kinds
+
+    # UAV 2 finishes the work it could reach before the quorum stopped it.
     agent_completions = [
         (event.task_id, event.timestamp)
         for event in result.mission.events
         if event.kind is MissionEventKind.TASK_COMPLETED and event.agent_id == 2
     ]
-    assert agent_completions == [
-        (19, 4.0),
-        (15, 4.75),
-        (20, 7.5),
-        (2, 11.75),
-    ]
+    assert agent_completions == [(19, 4.0), (15, 4.75)]
 
     positions_during_outage = {
         position

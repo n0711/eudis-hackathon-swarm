@@ -472,10 +472,6 @@ class Simulation:
             observed_positions,
             blocked_agent_ids=self._blocked_communication_agents,
         )
-        self.peer_state_transport.synchronize_link_evidence(
-            timestamp,
-            observing_agent_ids=self._participating_agent_ids(),
-        )
         self._last_communication_update = timestamp
         observed_unreachable_ids = (
             frozenset()

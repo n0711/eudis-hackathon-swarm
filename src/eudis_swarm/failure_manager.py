@@ -199,15 +199,10 @@ class FailureManager:
                 observation = store.observation_for(suspected_agent_id)
                 if observation is None:
                     continue
-                # a restored link receives a full timeout grace period so the
-                # detector cannot vote before the next healthy heartbeat arrives.
-                reachable_since = store.reachable_since_for(suspected_agent_id)
-                if (
-                    store.link_reachable_for(suspected_agent_id) is not True
-                    or reachable_since is None
-                    or timestamp - max(observation.received_at, reachable_since)
-                    <= self.heartbeat_timeout
-                ):
+                # silence is the only evidence available.  A voter cannot tell
+                # a jammed peer from a destroyed one, so this deliberately can
+                # suspect a healthy peer on the far side of a partition.
+                if timestamp - observation.received_at <= self.heartbeat_timeout:
                     continue
                 store.observe_silence(
                     suspected_agent_id,
@@ -268,13 +263,7 @@ class FailureManager:
                 observation = store.observation_for(suspected_agent_id)
                 if observation is None:
                     continue
-                reachable_since = store.reachable_since_for(suspected_agent_id)
-                if (
-                    store.link_reachable_for(suspected_agent_id) is not True
-                    or reachable_since is None
-                    or timestamp - max(observation.received_at, reachable_since)
-                    <= self.heartbeat_timeout
-                ):
+                if timestamp - observation.received_at <= self.heartbeat_timeout:
                     continue
                 store.observe_silence(
                     suspected_agent_id,

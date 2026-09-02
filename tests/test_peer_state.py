@@ -128,8 +128,6 @@ def test_peer_freshness_uses_strict_timeout_and_refreshes() -> None:
 def test_silence_and_insufficient_quorum_never_declare_failure() -> None:
     store = PeerStateStore(1, (2, 3), stale_after=2.5)
     store.receive(_snapshot(2, 0.0), 0.0)
-    # keep the link available so this is silence rather than known unreachability.
-    store.observe_link_state(2, reachable=True, timestamp=0.0)
 
     assert store.status_for(2) is PeerStatus.HEARD
     assert store.advance_time(2.5001) == (2,)

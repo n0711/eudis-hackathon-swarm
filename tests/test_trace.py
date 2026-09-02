@@ -67,15 +67,16 @@ def test_outage_trace_separates_physical_health_from_local_staleness() -> None:
     observation = next(
         peer for peer in observer.peer_knowledge if peer.peer_agent_id == 2
     )
-    assert isolated_uav.physical_state == "ACTIVE"
+    assert isolated_uav.physical_state == "FAILED"
     assert isolated_uav.neighbor_ids == ()
     assert observation.state == "STALE"
-    assert observation.peer_status == "UNREACHABLE"
+    assert observation.peer_status == "DECLARED_FAILED"
     assert observation.last_known_position is not None
     assert stale_frame.metrics.stale_peer_observations == 6
 
     restored_frame = next(frame for frame in trace.frames if frame.timestamp == 8.0)
-    assert restored_frame.metrics.stale_peer_observations == 0
+    # the link returns but the declared UAV is stopped, so the views stay stale.
+    assert restored_frame.metrics.stale_peer_observations == 6
     assert (
         len(
             next(

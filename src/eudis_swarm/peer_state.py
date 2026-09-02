@@ -31,7 +31,6 @@ class PeerStatus(str, Enum):
 
     HEARD = "HEARD"
     SILENT = "SILENT"
-    UNREACHABLE = "UNREACHABLE"
     DECLARED_FAILED = "DECLARED_FAILED"
 
 
@@ -75,12 +74,6 @@ class PeerStateStore:
             peer_agent_id: PeerKnowledgeState.UNKNOWN
             for peer_agent_id in self._peer_agent_ids
         }
-        self._link_reachable: dict[int, bool | None] = {
-            peer_agent_id: None for peer_agent_id in self._peer_agent_ids
-        }
-        self._reachable_since: dict[int, float | None] = {
-            peer_agent_id: None for peer_agent_id in self._peer_agent_ids
-        }
         self._silent_peer_ids: set[int] = set()
         self._declared_failed_peer_ids: set[int] = set()
         self._last_timestamp: float | None = None
@@ -114,14 +107,6 @@ class PeerStateStore:
         )
 
     @property
-    def unreachable_peer_ids(self) -> frozenset[int]:
-        return frozenset(
-            peer_agent_id
-            for peer_agent_id in self._peer_agent_ids
-            if self.status_for(peer_agent_id) is PeerStatus.UNREACHABLE
-        )
-
-    @property
     def declared_failed_peer_ids(self) -> frozenset[int]:
         return frozenset(self._declared_failed_peer_ids)
 
@@ -130,13 +115,17 @@ class PeerStateStore:
         return self._states[peer_agent_id]
 
     def status_for(self, peer_agent_id: int) -> PeerStatus:
-        """Interpret freshness and link evidence without consulting world truth."""
+        """Interpret only locally observable evidence: what was heard, and when.
+
+        There is deliberately no ``UNREACHABLE`` status.  A receiver cannot
+        distinguish a jammed peer from a destroyed one -- both are silence --
+        so exposing a per-peer link verdict here would be world truth the
+        radio layer cannot supply.
+        """
 
         self._require_peer(peer_agent_id)
         if peer_agent_id in self._declared_failed_peer_ids:
             return PeerStatus.DECLARED_FAILED
-        if self._link_reachable[peer_agent_id] is False:
-            return PeerStatus.UNREACHABLE
         if (
             peer_agent_id not in self._silent_peer_ids
             and self._states[peer_agent_id] is PeerKnowledgeState.FRESH
@@ -144,17 +133,12 @@ class PeerStateStore:
             return PeerStatus.HEARD
         return PeerStatus.SILENT
 
-    def link_reachable_for(self, peer_agent_id: int) -> bool | None:
-        """Return the latest local link evidence, or ``None`` before observation."""
+    def heard_at_for(self, peer_agent_id: int) -> float | None:
+        """Return when this receiver last heard from a peer, or ``None``."""
 
         self._require_peer(peer_agent_id)
-        return self._link_reachable[peer_agent_id]
-
-    def reachable_since_for(self, peer_agent_id: int) -> float | None:
-        """Return when the current uninterrupted reachable interval began."""
-
-        self._require_peer(peer_agent_id)
-        return self._reachable_since[peer_agent_id]
+        observation = self._observations.get(peer_agent_id)
+        return None if observation is None else observation.received_at
 
     def observation_for(self, peer_agent_id: int) -> PeerObservation | None:
         self._require_peer(peer_agent_id)
@@ -196,10 +180,8 @@ class PeerStateStore:
         refreshed = self._states[snapshot.agent_id] is PeerKnowledgeState.STALE
         self._observations[snapshot.agent_id] = observation
         self._states[snapshot.agent_id] = PeerKnowledgeState.FRESH
-        # a successful delivery is positive receiver-local link evidence.
-        if self._link_reachable[snapshot.agent_id] is not True:
-            self._reachable_since[snapshot.agent_id] = received_at
-        self._link_reachable[snapshot.agent_id] = True
+        # hearing from a peer is the only positive evidence a receiver gets,
+        # and it restarts the silence interval on its own.
         self._silent_peer_ids.discard(snapshot.agent_id)
         self._last_timestamp = received_at
         return refreshed
@@ -221,44 +203,16 @@ class PeerStateStore:
             name="peer-silence timestamp",
         )
         observation = self._observations.get(peer_agent_id)
-        reachable_since = self._reachable_since[peer_agent_id]
-        if (
-            observation is None
-            or self._link_reachable[peer_agent_id] is not True
-            or reachable_since is None
-        ):
+        if observation is None:
             self._last_timestamp = timestamp
             return False
-        evidence_start = max(observation.received_at, reachable_since)
-        if timestamp - evidence_start <= silent_after:
+        if timestamp - observation.received_at <= silent_after:
             self._last_timestamp = timestamp
             return False
         newly_silent = peer_agent_id not in self._silent_peer_ids
         self._silent_peer_ids.add(peer_agent_id)
         self._last_timestamp = timestamp
         return newly_silent
-
-    def observe_link_state(
-        self, peer_agent_id: int, *, reachable: bool, timestamp: float
-    ) -> None:
-        """Record the local link layer's current delivery evidence for one peer."""
-
-        self._require_peer(peer_agent_id)
-        if not isinstance(reachable, bool):
-            raise TypeError("reachable must be boolean")
-        timestamp = validate_timestamp(
-            timestamp,
-            previous=self._last_timestamp,
-            name="peer link-state timestamp",
-        )
-        previous_reachability = self._link_reachable[peer_agent_id]
-        self._link_reachable[peer_agent_id] = reachable
-        if reachable and previous_reachability is not True:
-            # a restored link starts a new grace interval before suspicion.
-            self._reachable_since[peer_agent_id] = timestamp
-        elif not reachable:
-            self._reachable_since[peer_agent_id] = None
-        self._last_timestamp = timestamp
 
     def apply_failure_declaration(
         self,

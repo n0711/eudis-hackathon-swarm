@@ -50,24 +50,21 @@ def test_link_cut_is_not_failure_and_reconnect_refreshes_the_same_store() -> Non
     failure_manager = FailureManager(2.5, stores)
 
     graph.update(positions)
-    transport.synchronize_link_evidence(0.0)
     transport.deliver((_heartbeat(source, 0.0),), 0.0)
     assert observer_store.status_for(1) is PeerStatus.HEARD
 
+    # cutting the link tells the observer nothing; only elapsed silence does.
     graph.update(positions, blocked_links={(1, 2)})
-    transport.synchronize_link_evidence(1.0)
-    assert observer_store.status_for(1) is PeerStatus.UNREACHABLE
+    assert observer_store.status_for(1) is PeerStatus.HEARD
 
     observer_store.advance_time(3.0)
     assert observer_store.state_for(1) is PeerKnowledgeState.STALE
-    assert observer_store.status_for(1) is PeerStatus.UNREACHABLE
-    assert (
-        failure_manager.propose_votes(
-            3.0,
-            participating_agent_ids=(2,),
-        )
-        == ()
-    )
+    assert observer_store.status_for(1) is PeerStatus.SILENT
+    # the observer now genuinely suspects the peer it can no longer hear...
+    proposed = failure_manager.propose_votes(3.0, participating_agent_ids=(2,))
+    assert [vote.suspected_agent_id for vote in proposed] == [1]
+
+    # ...but a lone observer is never a quorum, so nothing is declared.
     assert (
         failure_manager.detect_declarations(
             3.0,
@@ -80,7 +77,6 @@ def test_link_cut_is_not_failure_and_reconnect_refreshes_the_same_store() -> Non
     assert source.status is AgentStatus.IDLE
 
     graph.update(positions)
-    transport.synchronize_link_evidence(4.0)
     assert stores[2] is observer_store
     assert observer_store.status_for(1) is PeerStatus.SILENT
 
@@ -119,14 +115,12 @@ def test_one_connected_observer_cannot_turn_silence_into_consensus() -> None:
     failure_manager = FailureManager(2.5, stores)
 
     graph.update(positions)
-    transport.synchronize_link_evidence(0.0)
     transport.deliver(
         tuple(_heartbeat(agents[agent_id], 0.0) for agent_id in agent_ids),
         0.0,
     )
 
     graph.update(positions)
-    transport.synchronize_link_evidence(3.0)
     votes = failure_manager.propose_votes(3.0, participating_agent_ids=(1,))
 
     assert len(votes) == 1
@@ -137,7 +131,7 @@ def test_one_connected_observer_cannot_turn_silence_into_consensus() -> None:
     assert stores[1].declared_failed_peer_ids == frozenset()
 
 
-def test_reconnected_link_gets_timeout_grace_before_a_new_heartbeat() -> None:
+def test_reconnection_without_a_heartbeat_does_not_clear_suspicion() -> None:
     agent_ids = (1, 2, 3)
     agents = {
         agent_id: Agent(agent_id, position=(0.0, 0.0), speed=1.0)
@@ -150,7 +144,6 @@ def test_reconnected_link_gets_timeout_grace_before_a_new_heartbeat() -> None:
     failure_manager = FailureManager(2.5, stores)
 
     graph.update(positions)
-    transport.synchronize_link_evidence(0.0)
     transport.deliver(
         tuple(_heartbeat(agents[agent_id], 0.0) for agent_id in agent_ids),
         0.0,
@@ -158,15 +151,14 @@ def test_reconnected_link_gets_timeout_grace_before_a_new_heartbeat() -> None:
 
     # the healthy target is unreachable long enough for its old snapshot to age.
     graph.update(positions, blocked_links={(1, 2), (2, 3)})
-    transport.synchronize_link_evidence(1.0)
     for store in stores.values():
         store.advance_time(4.1)
-    assert stores[1].status_for(2) is PeerStatus.UNREACHABLE
-    assert stores[3].status_for(2) is PeerStatus.UNREACHABLE
+    assert stores[1].status_for(2) is PeerStatus.SILENT
+    assert stores[3].status_for(2) is PeerStatus.SILENT
 
-    # restoration happens between heartbeats, so old silence gets a fresh grace period.
+    # restoration happens between heartbeats.  The link is back, but neither
+    # observer has heard from UAV 2, and no local fact reveals the difference.
     graph.update(positions)
-    transport.synchronize_link_evidence(4.1)
     transport.deliver(
         (_heartbeat(agents[1], 4.1), _heartbeat(agents[3], 4.1)),
         4.1,
@@ -175,7 +167,11 @@ def test_reconnected_link_gets_timeout_grace_before_a_new_heartbeat() -> None:
     assert stores[1].status_for(2) is PeerStatus.SILENT
     assert stores[3].status_for(2) is PeerStatus.SILENT
 
-    assert failure_manager.propose_votes(4.25, participating_agent_ids=(1, 3)) == ()
+    proposed = failure_manager.propose_votes(4.25, participating_agent_ids=(1, 3))
+    assert {vote.suspected_agent_id for vote in proposed} == {2}
+    assert {vote.voter_agent_id for vote in proposed} == {1, 3}
+
+    # suspicion is still not consensus: no vote was delivered, so nobody declares.
     assert (
         failure_manager.detect_declarations(
             4.25,
@@ -208,7 +204,6 @@ def test_fixed_two_by_two_partition_routes_only_within_components() -> None:
 
     # all positions stay fixed, so explicit link policy is the only partition cause.
     graph.update(positions, blocked_links=cross_component_links)
-    transport.synchronize_link_evidence(0.0)
     batch = transport.deliver(
         tuple(_heartbeat(agents[agent_id], 0.0) for agent_id in agent_ids),
         0.0,
@@ -230,7 +225,7 @@ def test_fixed_two_by_two_partition_routes_only_within_components() -> None:
         for peer_agent_id in expected_peers:
             assert store.status_for(peer_agent_id) is PeerStatus.HEARD
         for peer_agent_id in set(agent_ids) - expected_peers - {observer_agent_id}:
-            assert store.status_for(peer_agent_id) is PeerStatus.UNREACHABLE
+            assert store.status_for(peer_agent_id) is PeerStatus.SILENT
 
 
 def test_graph_delivered_failure_votes_form_a_quorum() -> None:
@@ -246,7 +241,6 @@ def test_graph_delivered_failure_votes_form_a_quorum() -> None:
     failure_manager = FailureManager(2.5, stores)
 
     graph.update(positions)
-    transport.synchronize_link_evidence(0.0)
     transport.deliver(
         tuple(_heartbeat(agents[agent_id], 0.0) for agent_id in agent_ids),
         0.0,
@@ -255,7 +249,6 @@ def test_graph_delivered_failure_votes_form_a_quorum() -> None:
     assert agents[4].inject_failure(1.0) is True
 
     graph.update(positions)
-    transport.synchronize_link_evidence(3.0)
     survivors = (1, 2, 3)
     transport.deliver(
         tuple(_heartbeat(agents[agent_id], 3.0) for agent_id in survivors),
@@ -321,7 +314,6 @@ def test_declaration_certificates_retry_after_partition_reconnects() -> None:
     failure_manager = FailureManager(2.5, stores)
 
     graph.update(positions)
-    transport.synchronize_link_evidence(0.0)
     transport.deliver(
         tuple(_heartbeat(agents[agent_id], 0.0) for agent_id in agent_ids),
         0.0,
@@ -330,7 +322,6 @@ def test_declaration_certificates_retry_after_partition_reconnects() -> None:
     # observer four is isolated while three peers corroborate target five's silence.
     isolated_observer_links = {(1, 4), (2, 4), (3, 4), (4, 5)}
     graph.update(positions, blocked_links=isolated_observer_links)
-    transport.synchronize_link_evidence(3.0)
     survivors = (1, 2, 3, 4)
     transport.deliver(
         tuple(_heartbeat(agents[agent_id], 3.0) for agent_id in survivors),
@@ -351,23 +342,34 @@ def test_declaration_certificates_retry_after_partition_reconnects() -> None:
         3.0,
         participating_agent_ids=survivors,
     )
-    assert len(detected) == 1
-    assert detected[0].declarer_agent_id == 1
+    # UAV 1 declares both the silent target and the isolated observer: from
+    # inside the majority the two silences are indistinguishable.
+    assert sorted((item.declarer_agent_id, item.agent_id) for item in detected) == [
+        (1, 4),
+        (1, 5),
+    ]
 
     certificates = failure_manager.declarations_for_broadcast(
         participating_agent_ids=survivors
     )
-    assert [item.declarer_agent_id for item in certificates] == [1, 2, 3]
+    # each of the three connected UAVs certifies both silences.
+    assert sorted((item.declarer_agent_id, item.agent_id) for item in certificates) == [
+        (1, 4),
+        (1, 5),
+        (2, 4),
+        (2, 5),
+        (3, 4),
+        (3, 5),
+    ]
     transport.deliver_failure_declarations(
         certificates,
         3.0,
         receiving_agent_ids=survivors,
     )
-    assert stores[4].status_for(5) is PeerStatus.UNREACHABLE
+    assert stores[4].status_for(5) is PeerStatus.SILENT
 
     # reconnecting does not reset stores; persistent certificates retry in place.
     graph.update(positions)
-    transport.synchronize_link_evidence(3.25)
     retry_certificates = failure_manager.declarations_for_broadcast(
         participating_agent_ids=survivors
     )
@@ -387,7 +389,6 @@ def test_protocol_transport_rejects_messages_from_the_future() -> None:
     transport = PeerStateTransport(graph, stores)
     failure_manager = FailureManager(2.5, stores)
     graph.update(positions)
-    transport.synchronize_link_evidence(0.0)
 
     future_vote = FailureVote(
         voter_agent_id=1,
@@ -430,13 +431,11 @@ def test_quorum_without_the_local_declarer_is_ignored_safely() -> None:
     failure_manager = FailureManager(2.5, stores)
 
     graph.update(positions)
-    transport.synchronize_link_evidence(0.0)
     transport.deliver(
         tuple(_heartbeat(agents[agent_id], 0.0) for agent_id in agent_ids),
         0.0,
     )
     graph.update(positions)
-    transport.synchronize_link_evidence(3.0)
 
     # receiver one has two remote votes but contributed no local evidence itself.
     for voter_agent_id in (2, 3):
@@ -469,7 +468,6 @@ def test_failure_votes_expire_and_unchanged_evidence_is_retried() -> None:
     failure_manager = FailureManager(2.5, stores)
 
     graph.update(positions)
-    transport.synchronize_link_evidence(0.0)
     transport.deliver(
         tuple(_heartbeat(agents[agent_id], 0.0) for agent_id in agent_ids),
         0.0,
@@ -477,7 +475,6 @@ def test_failure_votes_expire_and_unchanged_evidence_is_retried() -> None:
 
     # only the two live observers publish at the timeout boundary.
     graph.update(positions)
-    transport.synchronize_link_evidence(3.0)
     transport.deliver(
         (_heartbeat(agents[1], 3.0), _heartbeat(agents[2], 3.0)),
         3.0,

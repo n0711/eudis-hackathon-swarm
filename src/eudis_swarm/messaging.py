@@ -116,39 +116,7 @@ class PeerStateTransport:
         self._stores = dict(stores)
         self._agent_ids = frozenset(graph.agent_ids)
         self._last_timestamp: float | None = None
-        self._last_link_state_timestamp: float | None = None
         self._last_protocol_timestamp: float | None = None
-
-    def synchronize_link_evidence(
-        self,
-        timestamp: float,
-        *,
-        observing_agent_ids: Iterable[int] | None = None,
-    ) -> None:
-        """Expose direct delivery results only to participating local observers."""
-
-        timestamp = validate_timestamp(
-            timestamp,
-            previous=self._last_link_state_timestamp,
-            name="link-evidence timestamp",
-        )
-        if not self._graph.initialized:
-            raise RuntimeError(
-                "communication graph must be initialized before link evidence"
-            )
-        observers = self._receivers(observing_agent_ids)
-        for receiver_agent_id, store in sorted(self._stores.items()):
-            if receiver_agent_id not in observers:
-                continue
-            for peer_agent_id in store.peer_agent_ids:
-                # this adapter exposes only a local yes/no delivery fact; it
-                # never copies positions, components, or other world truth.
-                store.observe_link_state(
-                    peer_agent_id,
-                    reachable=self._graph.can_deliver(peer_agent_id, receiver_agent_id),
-                    timestamp=timestamp,
-                )
-        self._last_link_state_timestamp = timestamp
 
     def deliver(
         self,

@@ -109,7 +109,7 @@ def test_connectivity_policy_makes_an_explainable_different_decision() -> None:
     assert connectivity.metrics.total_communication_degraded_duration == 8.25
     assert connectivity.metrics.connectivity_aware_assignment_count == 20
     # one raw-fresh but non-heard peer is now correctly excluded from scoring.
-    assert connectivity.metrics.predicted_isolation_assignment_count == 12
+    assert connectivity.metrics.predicted_isolation_assignment_count == 11
 
 
 def test_connectivity_comparison_is_deterministic() -> None:
@@ -120,7 +120,7 @@ def test_connectivity_comparison_is_deterministic() -> None:
     assert first.metrics.allocation_decisions == second.metrics.allocation_decisions
 
 
-def test_stale_peer_state_never_releases_work_or_declares_failure() -> None:
+def test_stale_peer_state_under_the_connectivity_policy_still_loses_the_uav() -> None:
     result = Simulation(
         SimulationConfig(
             failure_time=100.0,
@@ -135,18 +135,18 @@ def test_stale_peer_state_never_releases_work_or_declares_failure() -> None:
 
     assert result.metrics.mission_completed is True
     assert result.metrics.simulation_duration == 11.75
-    assert result.metrics.failed_agent_count == 0
-    assert result.metrics.orphaned_task_count == 0
-    assert result.metrics.reassigned_task_count == 0
+    # the allocation policy does not change the detector's verdict.
+    assert result.metrics.failed_agent_count == 1
+    assert result.metrics.orphaned_task_count == 1
+    assert result.metrics.reassigned_task_count == 1
     assert result.metrics.peer_state_stale_transition_count == 6
-    assert result.metrics.peer_state_refresh_transition_count == 6
-    assert result.mission.agents[2].responsive is True
-    assert not any(
-        event.kind
-        in {
-            MissionEventKind.FAILURE_DECLARED,
-            MissionEventKind.TASK_RELEASED,
-            MissionEventKind.TASK_REASSIGNED,
-        }
-        for event in result.mission.events
-    )
+    # nothing refreshes: the declared UAV is stopped before its link returns.
+    assert result.metrics.peer_state_refresh_transition_count == 0
+    # the world stops a physically healthy UAV because its peers voted it dead.
+    assert result.mission.agents[2].responsive is False
+    assert result.mission.agents[2].failure_injected_at is None
+    assert {
+        MissionEventKind.FAILURE_DECLARED,
+        MissionEventKind.TASK_RELEASED,
+        MissionEventKind.TASK_REASSIGNED,
+    } <= {event.kind for event in result.mission.events}
