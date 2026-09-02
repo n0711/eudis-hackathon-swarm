@@ -51,12 +51,14 @@ def test_jamming_is_misread_as_failure_without_ownership_reconciliation() -> Non
 
     assert metrics.mission_completed is True
     assert metrics.completed_task_count == 20
-    assert metrics.simulation_duration == pytest.approx(11.75)
+    assert metrics.simulation_duration == pytest.approx(10.75)
     # UAV 2 was never physically harmed: no failure was ever injected into it.
     assert agent.failure_injected_at is None
 
-    # ...yet the swarm declared it dead and took its work away.
-    assert metrics.failed_agent_count == 1
+    # ...yet the swarm declared it dead and took its work away, before
+    # first-hand contact on reconnection overturned the verdict.
+    assert metrics.declaration_retraction_count == 1
+    assert metrics.failed_agent_count == 0
     assert metrics.orphaned_task_count == 1
     assert metrics.reassigned_task_count == 1
     assert result.mission.tasks[19].status is TaskStatus.COMPLETED
@@ -77,7 +79,9 @@ def test_jamming_is_misread_as_failure_without_ownership_reconciliation() -> Non
         for event in result.mission.events
         if event.kind is MissionEventKind.TASK_COMPLETED and event.agent_id == 2
     ]
-    assert agent_completions == [(19, 4.0), (15, 4.75)]
+    # Tasks 19 and 15 finish during the outage; Task 20 is duplicated while
+    # UAV 2 is believed dead, then it rejoins and completes Task 20 for real.
+    assert agent_completions == [(19, 4.0), (15, 4.75), (20, 10.5)]
 
     positions_during_outage = {
         position
@@ -395,14 +399,22 @@ def test_a_wrongly_declared_uav_keeps_flying_and_duplicates_the_work() -> None:
     metrics = result.metrics
     agent = result.mission.agents[2]
 
-    # the swarm believes UAV 2 is dead...
-    assert agent.status is AgentStatus.FAILED
-    assert metrics.failed_agent_count == 1
+    # the swarm declared UAV 2 dead while it was jammed...
+    declared = [
+        event
+        for event in result.mission.events
+        if event.kind is MissionEventKind.FAILURE_DECLARED
+    ]
+    assert [event.agent_id for event in declared] == [2]
 
-    # ...while the vehicle is untouched and still airborne.
+    # ...the vehicle was never touched...
     assert agent.responsive is True
     assert agent.failure_injected_at is None
-    assert agent.wrongly_declared is True
+
+    # ...and once the link returned, first-hand contact overturned the verdict.
+    assert metrics.declaration_retraction_count == 1
+    assert metrics.failed_agent_count == 0
+    assert agent.wrongly_declared is False
 
     # the coordinator reassigned work UAV 2 never let go of.
     assert metrics.belief_divergence_event_count == 1

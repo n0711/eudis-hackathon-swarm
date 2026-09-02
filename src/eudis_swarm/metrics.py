@@ -51,6 +51,9 @@ class SimulationMetrics:
     human_interventions: int = 0
     duplicated_task_completion_count: int = 0
     belief_divergence_event_count: int = 0
+    declaration_retraction_count: int = 0
+    claim_refused_allocation_count: int = 0
+    contested_task_yield_count: int = 0
     allocation_policy: str = "distance"
     connectivity_aware_assignment_count: int = 0
     predicted_isolation_assignment_count: int = 0
@@ -371,6 +374,8 @@ class SimulationMetrics:
             f"Tasks reassigned: {self.reassigned_task_count}",
             f"Recovered tasks: {self.recovered_task_count}",
             f"Belief divergences: {self.belief_divergence_event_count}",
+            f"Declarations retracted: {self.declaration_retraction_count}",
+            f"Contested tasks yielded: {self.contested_task_yield_count}",
             f"Duplicated completions: {self.duplicated_task_completion_count}",
             f"Simulation duration: {self.simulation_duration:.2f} s",
             "Failure detection latency: "

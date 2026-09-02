@@ -133,6 +133,26 @@ class FailureManager:
 
         return frozenset(self._reported_agent_ids)
 
+    def retract_declaration(self, agent_id: int) -> bool:
+        """Forget a declaration contradicted by first-hand contact."""
+
+        self._require_configured()
+        self._require_agent(agent_id, name="agent_id")
+        if agent_id not in self._reported_agent_ids:
+            return False
+        self._reported_agent_ids.discard(agent_id)
+        self._declarations_by_declarer = {
+            declarer_agent_id: {
+                suspected_agent_id: declaration
+                for suspected_agent_id, declaration in declarations.items()
+                if suspected_agent_id != agent_id
+            }
+            for declarer_agent_id, declarations in self._declarations_by_declarer.items()
+        }
+        for votes_by_target in self._votes_by_receiver.values():
+            votes_by_target.pop(agent_id, None)
+        return True
+
     def declarations_for_broadcast(
         self,
         *,

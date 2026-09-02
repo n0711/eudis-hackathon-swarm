@@ -4,7 +4,10 @@ They prove the vocabulary and its dependence on delivered peer evidence.
 """
 
 from eudis_swarm.agent import Agent
+from eudis_swarm.config import SimulationConfig
+from eudis_swarm.mission import MissionEventKind
 from eudis_swarm.peer_state import PeerStateStore
+from eudis_swarm.simulation import Simulation
 from eudis_swarm.task import TaskOwnershipState, classify_task_ownership
 
 
@@ -115,3 +118,53 @@ def test_multiple_local_claimants_are_contested() -> None:
         )
         is TaskOwnershipState.CONTESTED
     )
+
+
+def test_leases_stop_the_coordinator_handing_out_work_it_does_not_own() -> None:
+    """Mission is no longer the single writer of task ownership.
+
+    A partitioned UAV keeps a live lease on its task.  The coordinator cannot
+    see that claim, wants to reassign the work, and is refused until the lease
+    lapses.  When the partition heals the competing claims meet and the loser
+    yields, so ownership converges without anybody being overruled centrally.
+    """
+
+    result = Simulation(
+        SimulationConfig(
+            failure_time=100.0,
+            communication_range=130.0,
+            comm_fault_agent_id=2,
+            comm_fault_start=4.0,
+            comm_fault_end=8.0,
+        )
+    ).run()
+    metrics = result.metrics
+
+    # allocation proposals were actually blocked by leases held elsewhere.
+    assert metrics.claim_refused_allocation_count > 0
+
+    # reconnection surfaced a genuine contest, and it was resolved by release.
+    assert metrics.contested_task_yield_count == 1
+    yielded = [
+        event
+        for event in result.mission.events
+        if event.kind is MissionEventKind.TASK_YIELDED
+    ]
+    assert len(yielded) == 1
+
+    # no contest survives reconciliation anywhere in the swarm.  (Evidence for
+    # the very last completion has not been broadcast when the mission ends,
+    # so replicas may still lag on that one task -- but none of them disagree
+    # about who owns anything.)
+    assert result.task_claim_stores is not None
+    end_time = metrics.end_time
+    assert end_time is not None
+    for task_id in result.mission.tasks:
+        for store in result.task_claim_stores.values():
+            view = store.view(task_id, end_time)
+            assert not view.contested, (
+                f"UAV {store.owner_agent_id} still contests Task {task_id}"
+            )
+
+    assert metrics.mission_completed is True
+    assert metrics.completed_task_count == 20

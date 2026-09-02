@@ -61,7 +61,12 @@ def test_failed_uav_task_is_reassigned_and_mission_completes() -> None:
     assert failure.injected_at is not None
     assert failure.detected_at - failure.last_heartbeat > config.failure_timeout
     assert orphan.orphaned_at == failure.detected_at
-    assert orphan.reassigned_at == orphan.orphaned_at
+    # the task is not handed on the instant its owner is declared dead: the
+    # dead UAV's lease is still live, and no replica may overwrite it until
+    # it lapses.  Reassignment follows lease expiry, not the declaration.
+    assert orphan.reassigned_at is not None
+    assert orphan.reassigned_at > orphan.orphaned_at
+    assert orphan.reassigned_at == pytest.approx(3.5)
 
     frozen_positions = {
         position

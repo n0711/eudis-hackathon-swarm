@@ -27,6 +27,7 @@ class SimulationConfig:
     failure_timeout: float = 2.5
     peer_state_stale_after: float = 2.5
     allocation_policy: str = "distance"
+    claim_lease_duration: float = 2.5
     failure_agent_id: int = 2
     failure_time: float = 4.0
     max_simulation_time: float = 300.0
@@ -56,6 +57,7 @@ class SimulationConfig:
             "heartbeat_interval": self.heartbeat_interval,
             "failure_timeout": self.failure_timeout,
             "peer_state_stale_after": self.peer_state_stale_after,
+            "claim_lease_duration": self.claim_lease_duration,
             "max_simulation_time": self.max_simulation_time,
             "communication_range": self.communication_range,
         }

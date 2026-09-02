@@ -18,7 +18,7 @@ from .agent import Agent, AgentStatus, Heartbeat, Position
 from .communication import CommunicationGraph, CommunicationUpdate
 from .config import SimulationConfig
 from .failure_manager import FailureDeclaration, FailureManager
-from .messaging import DeliveryBatch, PeerStateTransport
+from .messaging import DeliveryBatch, PeerStateTransport, TaskClaimTransport
 from .metrics import SimulationMetrics
 from .mission import Mission
 from .peer_state import PeerStateStore
@@ -30,6 +30,7 @@ from .simulation_events import (
 )
 from .task import Task
 from .task_allocator import CommunicationAwareTaskAllocator, TaskAllocator
+from .task_claims import TaskClaimStore
 from .trace import SimulationTrace, TraceRecorder
 from .validation import validate_timestamp
 
@@ -45,6 +46,7 @@ class SimulationResult:
     communication_events: tuple[CommunicationEvent, ...] = ()
     peer_state_stores: dict[int, PeerStateStore] | None = None
     peer_state_events: tuple[PeerStateEvent, ...] = ()
+    task_claim_stores: dict[int, TaskClaimStore] | None = None
     trace: SimulationTrace | None = None
 
 
@@ -141,6 +143,20 @@ class Simulation:
             )
             for owner_agent_id in sorted(selected_agent_ids)
         }
+        # ownership is replicated per UAV, so a partitioned owner keeps a claim
+        # the rest of the swarm cannot see or revoke.
+        self.task_claim_stores = {
+            owner_agent_id: TaskClaimStore(
+                owner_agent_id,
+                selected_agent_ids,
+                tuple(task.task_id for task in selected_tasks),
+                config.claim_lease_duration,
+            )
+            for owner_agent_id in sorted(selected_agent_ids)
+        }
+        self.task_claim_transport = TaskClaimTransport(
+            self.communication_graph, self.task_claim_stores
+        )
         allocator = (
             TaskAllocator()
             if config.allocation_policy == "distance"
@@ -158,6 +174,7 @@ class Simulation:
                 self.peer_state_stores,
             ),
             metrics=metrics,
+            task_claim_stores=self.task_claim_stores,
         )
         self._history: dict[int, list[tuple[float, Position]]] = {
             agent.agent_id: [(0.0, agent.position)] for agent in selected_agents
@@ -399,6 +416,55 @@ class Simulation:
             agent.agent_id for agent in self.mission.ordered_agents if agent.responsive
         )
 
+    def _exchange_claim_evidence(self, timestamp: float) -> None:
+        """Publish and reconcile replicated task ownership over active links.
+
+        Every responsive UAV renews the lease on work it still believes it
+        owns, and publishes claims, tombstones and completion evidence to
+        whoever it can currently reach.  When a partition heals the competing
+        claims meet, every replica applies the same pure decision, and the
+        losing owner gives the task up.
+        """
+
+        participants = self._participating_agent_ids()
+        for agent_id in participants:
+            store = self.task_claim_stores[agent_id]
+            agent = self.mission.agents[agent_id]
+            if agent.current_task is not None and store.owns_task(
+                agent.current_task, timestamp
+            ):
+                store.renew_claim(agent.current_task, timestamp)
+
+        for agent_id in participants:
+            store = self.task_claim_stores[agent_id]
+            self.task_claim_transport.deliver_claims(
+                store.claims_for_broadcast(timestamp),
+                timestamp,
+                receiving_agent_ids=participants,
+            )
+            self.task_claim_transport.deliver_releases(
+                store.releases_for_broadcast(),
+                timestamp,
+                receiving_agent_ids=participants,
+            )
+            self.task_claim_transport.deliver_completions(
+                store.completions_for_broadcast(),
+                timestamp,
+                receiving_agent_ids=participants,
+            )
+
+        for agent_id in participants:
+            store = self.task_claim_stores[agent_id]
+            store.advance_time(timestamp)
+            for decision in store.reconcile_all(timestamp):
+                if decision.local_release is None:
+                    continue
+                self.mission.yield_contested_task(
+                    agent_id,
+                    decision.local_release.losing_claim.task_id,
+                    timestamp,
+                )
+
     def _exchange_failure_evidence(
         self, timestamp: float
     ) -> tuple[FailureDeclaration, ...]:
@@ -430,7 +496,29 @@ class Simulation:
             timestamp,
             receiving_agent_ids=participants,
         )
+        self._apply_retractions(timestamp)
         return declarations
+
+    def _apply_retractions(self, timestamp: float) -> None:
+        """Withdraw declarations that a quorum of peers has heard disproved.
+
+        A certificate is second-hand evidence.  Once enough of a UAV's peers
+        have received a snapshot straight from it, the swarm has to admit the
+        vehicle is alive -- otherwise a single outage would strike it off the
+        mission permanently.
+        """
+
+        required = self.mission.failure_manager.required_votes
+        for agent in self.mission.ordered_agents:
+            if not agent.wrongly_declared:
+                continue
+            witnesses = sum(
+                agent.agent_id in store.retracted_peer_ids
+                for peer_agent_id, store in self.peer_state_stores.items()
+                if peer_agent_id != agent.agent_id
+            )
+            if witnesses >= required:
+                self.mission.retract_declaration(agent.agent_id, timestamp)
 
     def _start_communication_fault(self, timestamp: float) -> None:
         agent_id = self.config.comm_fault_agent_id
@@ -709,6 +797,7 @@ class Simulation:
                     next_heartbeat += self.config.heartbeat_interval
 
             declarations = self._exchange_failure_evidence(timestamp)
+            self._exchange_claim_evidence(timestamp)
             self.mission.detect_and_recover(timestamp, declarations)
             self._complete_arrivals(timestamp)
             self.mission.allocate_tasks(timestamp)
@@ -744,6 +833,7 @@ class Simulation:
             communication_events=tuple(self.communication_events),
             peer_state_stores=dict(self.peer_state_stores),
             peer_state_events=tuple(self.peer_state_events),
+            task_claim_stores=dict(self.task_claim_stores),
             trace=trace,
         )
         LOGGER.info("\n%s", result.metrics.format_summary())

@@ -9,13 +9,14 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from enum import Enum
-from typing import Iterable
+from typing import Iterable, Mapping
 
 from .agent import Agent, AgentStatus, Heartbeat, Position
 from .failure_manager import FailureDeclaration, FailureManager
 from .metrics import SimulationMetrics
 from .task import Task, TaskStatus
 from .task_allocator import Allocation, AllocationPolicy
+from .task_claims import TaskClaimStore
 from .validation import validate_timestamp
 
 LOGGER = logging.getLogger(__name__)
@@ -27,10 +28,12 @@ class MissionEventKind(str, Enum):
     FAILURE_INJECTED = "FAILURE_INJECTED"
     HEARTBEAT_TIMEOUT = "HEARTBEAT_TIMEOUT"
     FAILURE_DECLARED = "FAILURE_DECLARED"
+    FAILURE_RETRACTED = "FAILURE_RETRACTED"
     TASK_RELEASED = "TASK_RELEASED"
     TASK_REASSIGNED = "TASK_REASSIGNED"
     TASK_COMPLETED = "TASK_COMPLETED"
     TASK_DUPLICATED = "TASK_DUPLICATED"
+    TASK_YIELDED = "TASK_YIELDED"
     MISSION_COMPLETED = "MISSION_COMPLETED"
     MISSION_TIMED_OUT = "MISSION_TIMED_OUT"
 
@@ -63,6 +66,7 @@ class Mission:
         allocator: AllocationPolicy,
         failure_manager: FailureManager,
         metrics: SimulationMetrics,
+        task_claim_stores: Mapping[int, TaskClaimStore] | None = None,
     ) -> None:
         self.agents = {agent.agent_id: agent for agent in agents}
         self.tasks = {task.task_id: task for task in tasks}
@@ -71,6 +75,9 @@ class Mission:
         if len(self.tasks) != metrics.total_task_count:
             raise ValueError("task IDs must be unique and match metrics")
         self.allocator = allocator
+        self.task_claim_stores = (
+            None if task_claim_stores is None else dict(task_claim_stores)
+        )
         # agent membership is immutable, so one traversal order can be reused.
         self._ordered_agents = tuple(
             sorted(self.agents.values(), key=lambda item: item.agent_id)
@@ -227,9 +234,26 @@ class Mission:
     def allocate_tasks(self, timestamp: float) -> list[Allocation]:
         self._require_running()
         timestamp = self._observe_time(timestamp)
-        allocations = self.allocator.allocate(self.agents.values(), self.tasks.values())
-        for allocation in allocations:
+        proposed = self.allocator.allocate(self.agents.values(), self.tasks.values())
+        allocations: list[Allocation] = []
+        for allocation in proposed:
+            # the coordinator is no longer the sole writer of ownership: a task
+            # whose lease is still valid somewhere in the swarm cannot be
+            # handed out, even if this replica believes it is free.
+            store = (
+                None
+                if self.task_claim_stores is None
+                else self.task_claim_stores[allocation.agent_id]
+            )
+            if store is not None and not store.can_create_claim(
+                allocation.task_id, timestamp
+            ):
+                self.metrics.claim_refused_allocation_count += 1
+                continue
             self._apply_allocation(allocation, timestamp)
+            if store is not None:
+                store.create_claim(allocation.task_id, timestamp)
+            allocations.append(allocation)
         return allocations
 
     def _declare_and_release(
@@ -332,6 +356,60 @@ class Mission:
             self.assert_consistent()
         return applied
 
+    def yield_contested_task(
+        self, agent_id: int, task_id: int, timestamp: float
+    ) -> bool:
+        """Give up work this UAV lost in distributed reconciliation."""
+
+        self._require_running()
+        timestamp = self._observe_time(timestamp)
+        agent = self.agents[agent_id]
+        if agent.current_task != task_id:
+            return False
+        task = self.tasks[task_id]
+        agent.release_task(task_id)
+        if task.status is TaskStatus.ASSIGNED and task.assigned_agent == agent_id:
+            task.release()
+        self.metrics.contested_task_yield_count += 1
+        self._event(
+            MissionEventKind.TASK_YIELDED,
+            timestamp,
+            agent_id=agent_id,
+            task_id=task_id,
+        )
+        LOGGER.info(
+            "[RECONCILE] UAV %d yielded Task %d after losing the contest",
+            agent_id,
+            task_id,
+        )
+        return True
+
+    def retract_declaration(self, agent_id: int, timestamp: float) -> bool:
+        """Undo a declaration that first-hand contact has disproved."""
+
+        self._require_running()
+        timestamp = self._observe_time(timestamp)
+        agent = self.agents[agent_id]
+        if not agent.wrongly_declared:
+            return False
+        agent.status = (
+            AgentStatus.ACTIVE if agent.current_task is not None else AgentStatus.IDLE
+        )
+        self.failure_manager.retract_declaration(agent_id)
+        self.metrics.failures.pop(agent_id, None)
+        self.metrics.declaration_retraction_count += 1
+        self._event(
+            MissionEventKind.FAILURE_RETRACTED,
+            timestamp,
+            agent_id=agent_id,
+            task_id=agent.current_task,
+        )
+        LOGGER.info(
+            "[RETRACTION] UAV %d is alive after all; declaration withdrawn",
+            agent_id,
+        )
+        return True
+
     def complete_task(self, agent_id: int, task_id: int, timestamp: float) -> None:
         self._require_running()
         timestamp = self._observe_time(timestamp)
@@ -357,6 +435,10 @@ class Mission:
             return
         task.complete(agent_id)
         agent.complete_task(task_id)
+        if self.task_claim_stores is not None:
+            store = self.task_claim_stores[agent_id]
+            if store.owns_task(task_id, timestamp):
+                store.create_completion(task_id, timestamp)
         self.metrics.record_task_completion(task_id, timestamp)
         self._event(
             MissionEventKind.TASK_COMPLETED,

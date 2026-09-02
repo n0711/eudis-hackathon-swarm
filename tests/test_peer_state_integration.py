@@ -35,9 +35,10 @@ def test_outage_stales_peer_views_and_costs_the_isolated_uav_its_work() -> None:
 
     assert metrics.mission_completed is True
     assert metrics.completed_task_count == 20
-    assert metrics.simulation_duration == 11.75
-    # the quorum misreads jamming as death; see the ownership-layer tests.
-    assert metrics.failed_agent_count == 1
+    assert metrics.simulation_duration == 10.75
+    # the quorum misreads jamming as death, then retracts on reconnection.
+    assert metrics.declaration_retraction_count == 1
+    assert metrics.failed_agent_count == 0
     assert metrics.orphaned_task_count == 1
     assert metrics.reassigned_task_count == 1
     assert isolated_agent.failure_injected_at is None
@@ -45,8 +46,8 @@ def test_outage_stales_peer_views_and_costs_the_isolated_uav_its_work() -> None:
     assert metrics.belief_divergence_event_count == 1
     assert metrics.duplicated_task_completion_count == 1
 
-    assert metrics.peer_messages_attempted == 144
-    assert metrics.peer_messages_delivered == 120
+    assert metrics.peer_messages_attempted == 132
+    assert metrics.peer_messages_delivered == 108
     assert metrics.peer_messages_undelivered == 24
     assert metrics.peer_state_stale_transition_count == 6
     assert metrics.peer_state_refresh_transition_count == 6
@@ -74,14 +75,15 @@ def test_outage_stales_peer_views_and_costs_the_isolated_uav_its_work() -> None:
         (3, 2),
         (4, 2),
     }
-    # the link returns and fresh snapshots arrive again -- but the declaration
-    # certificate is never retracted, so the peers still believe UAV 2 is dead.
+    # the link returns, fresh snapshots arrive, and every observer withdraws
+    # the certificate it helped issue: first-hand contact outranks a quorum.
     assert result.peer_state_stores is not None
     for observer_agent_id in (1, 3, 4):
         store = result.peer_state_stores[observer_agent_id]
         observation = store.observation_for(2)
         assert store.state_for(2) is PeerKnowledgeState.FRESH
-        assert store.status_for(2) is PeerStatus.DECLARED_FAILED
+        assert store.status_for(2) is PeerStatus.HEARD
+        assert store.retracted_peer_ids == frozenset({2})
         assert observation is not None
 
     # the minority of one never reaches quorum, so UAV 2 declares nobody.

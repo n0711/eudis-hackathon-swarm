@@ -134,16 +134,18 @@ def test_stale_peer_state_under_the_connectivity_policy_still_loses_the_uav() ->
     ).run()
 
     assert result.metrics.mission_completed is True
-    assert result.metrics.simulation_duration == 11.75
+    assert result.metrics.simulation_duration == 10.75
     # the allocation policy does not change the detector's verdict.
-    assert result.metrics.failed_agent_count == 1
+    assert result.metrics.declaration_retraction_count == 1
+    assert result.metrics.failed_agent_count == 0
     assert result.metrics.orphaned_task_count == 1
     assert result.metrics.reassigned_task_count == 1
     assert result.metrics.peer_state_stale_transition_count == 6
     assert result.metrics.peer_state_refresh_transition_count == 6
-    # the declaration is belief only: the vehicle is untouched and still flying.
+    # the declaration is belief only: the vehicle is untouched and, once the
+    # link returns, reinstated.
     assert result.mission.agents[2].responsive is True
-    assert result.mission.agents[2].wrongly_declared is True
+    assert result.mission.agents[2].wrongly_declared is False
     assert result.mission.agents[2].failure_injected_at is None
     assert result.metrics.duplicated_task_completion_count == 1
     assert {

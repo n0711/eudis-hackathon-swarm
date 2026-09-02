@@ -76,6 +76,7 @@ class PeerStateStore:
         }
         self._silent_peer_ids: set[int] = set()
         self._declared_failed_peer_ids: set[int] = set()
+        self._retracted_peer_ids: set[int] = set()
         self._last_timestamp: float | None = None
 
     @property
@@ -109,6 +110,12 @@ class PeerStateStore:
     @property
     def declared_failed_peer_ids(self) -> frozenset[int]:
         return frozenset(self._declared_failed_peer_ids)
+
+    @property
+    def retracted_peer_ids(self) -> frozenset[int]:
+        """Return peers this receiver declared dead and has since heard from."""
+
+        return frozenset(self._retracted_peer_ids)
 
     def state_for(self, peer_agent_id: int) -> PeerKnowledgeState:
         self._require_peer(peer_agent_id)
@@ -183,6 +190,11 @@ class PeerStateStore:
         # hearing from a peer is the only positive evidence a receiver gets,
         # and it restarts the silence interval on its own.
         self._silent_peer_ids.discard(snapshot.agent_id)
+        # first-hand contact outranks a second-hand certificate: if this peer
+        # was declared dead and is plainly transmitting, the quorum was wrong.
+        if snapshot.agent_id in self._declared_failed_peer_ids:
+            self._declared_failed_peer_ids.discard(snapshot.agent_id)
+            self._retracted_peer_ids.add(snapshot.agent_id)
         self._last_timestamp = received_at
         return refreshed
 
