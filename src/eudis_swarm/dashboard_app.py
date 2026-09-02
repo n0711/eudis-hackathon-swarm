@@ -409,6 +409,50 @@ def _peer_panel(frame: TraceFrame, selected_agent_id: int) -> None:
     st.dataframe(rows, hide_index=True, use_container_width=True)
 
 
+def _ownership_panel(frame: TraceFrame) -> None:
+    st.subheader("Replicated task ownership")
+    if not frame.ownership:
+        st.caption("No UAV holds ownership evidence for any task yet.")
+        return
+
+    if frame.disputed_task_ids:
+        disputed = ", ".join(f"Task {task_id}" for task_id in frame.disputed_task_ids)
+        st.warning(
+            f"Replicas disagree about ownership: {disputed}. "
+            "While a partition holds, both halves can believe they own the work."
+        )
+    else:
+        st.caption(
+            "Every replica agrees on ownership. Beliefs below are derived from "
+            "delivered claims only, never from authoritative task state."
+        )
+
+    owners_by_task: dict[int, dict[int, str]] = {}
+    for view in frame.ownership:
+        label = (
+            "—"
+            if view.known_owner_agent_id is None
+            else f"UAV {view.known_owner_agent_id}"
+        )
+        if view.contested:
+            label += " (contested)"
+        owners_by_task.setdefault(view.task_id, {})[view.observer_agent_id] = label
+
+    observer_ids = sorted({view.observer_agent_id for view in frame.ownership})
+    rows = []
+    for task_id in sorted(owners_by_task):
+        row: dict[str, str] = {
+            "Task": f"Task {task_id}",
+            "Disputed": "YES" if task_id in frame.disputed_task_ids else "",
+        }
+        for observer_agent_id in observer_ids:
+            row[f"UAV {observer_agent_id} believes"] = owners_by_task[task_id].get(
+                observer_agent_id, "—"
+            )
+        rows.append(row)
+    st.dataframe(rows, hide_index=True, use_container_width=True)
+
+
 def _timeline(
     events: Iterable[TraceEvent], duration: float, timestamp: float
 ) -> go.Figure:
@@ -457,6 +501,7 @@ def _metrics_bar(frame: TraceFrame) -> None:
         ("Isolated", str(frame.metrics.isolated_uavs)),
         ("Physical failures", str(frame.metrics.failed_uavs)),
         ("Stale views", str(frame.metrics.stale_peer_observations)),
+        ("Disputed tasks", str(frame.metrics.disputed_task_count)),
         (
             "Delivery",
             f"{frame.metrics.messages_delivered}/{frame.metrics.messages_attempted}",
@@ -632,6 +677,7 @@ def render_dashboard() -> None:
 
     with peer_area:
         _peer_panel(frame, selected_agent_id)
+        _ownership_panel(frame)
 
     with event_area:
         st.subheader("Structured event log")

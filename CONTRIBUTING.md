@@ -46,11 +46,12 @@ refactor, and needs discussion first.
 | Boundary | Rule |
 | --- | --- |
 | World truth vs agent belief | Physics, authoritative positions, global tasks, and topology belong to the simulation. An agent-local component may use self state and delivered/local evidence only. |
-| Physical vs communication state | `IDLE`/`ACTIVE`/`FAILED` never derives directly from link state. `SILENT`, `UNREACHABLE`, `STALE`, and `UNKNOWN` must never imply `FAILED`. |
+| Physical vs communication state | `IDLE`/`ACTIVE`/`FAILED` never derives directly from link state. `SILENT`, `STALE`, and `UNKNOWN` must never imply `FAILED`. |
+| Belief vs physical truth | `status is FAILED` is what the swarm *believes*. Only `inject_failure()` stops a vehicle. A declaration must never touch `responsive`, movement, or transmission. |
 | Silence vs declaration | A timeout may create a local `FailureVote`; only a validated quorum in one replica's mailbox may create `DECLARED_FAILED` and authorize recovery. |
 | Emission vs delivery | Creating a heartbeat, vote, declaration, claim, release, or completion is not remote delivery. Remote state changes must pass through the appropriate modeled transport and an available link. |
 | Task truth vs ownership evidence | `TaskStatus` is authoritative world state. `TaskClaimStore` derives only the six `TaskOwnershipState` values from local protocol evidence; stale remains owned until strict lease expiry. |
-| Proposal vs authority | Allocators propose `Allocation` records. Only `Mission` mutates agents and tasks. |
+| Proposal vs authority | Allocators propose `Allocation` records. Only `Mission` mutates agents and tasks — and it must refuse any proposal for a task whose lease is still valid in the assigning UAV's `TaskClaimStore`. |
 | Local vs global knowledge | An allocator reading peer state may read only the deciding UAV's own store, never another UAV's authoritative position. |
 | Observation vs behaviour | Metrics and traces are derived from transitions. They never feed decisions back into the simulation. |
 
@@ -65,13 +66,18 @@ heartbeat evidence must come from successful `PeerStateTransport.deliver()`
 calls.
 
 `CommunicationGraph` is allowed to use authoritative positions because it is
-the world-level network model. The only topology fact copied into a peer store
-is the pair-local delivery result exposed by
-`PeerStateTransport.synchronize_link_evidence()`; do not copy positions,
-components, or physical health through that adapter.
+the world-level network model. **No topology fact may be copied into a peer
+store at all.** A receiver learns only what it actually receives: a delivered
+snapshot, and the time it arrived. There is deliberately no per-peer "is the
+link up" flag, because a real radio cannot supply one — silence from a jammed
+peer and silence from a destroyed peer are identical. An earlier
+`synchronize_link_evidence()` adapter did exactly this and made the project's
+central claim unfalsifiable; do not reintroduce it in any form.
 
-Failure suspicion requires a previously delivered observation and a direct link
-that has remained continuously reachable beyond the strict timeout. Preserve
+Failure suspicion therefore requires only a previously delivered observation
+and elapsed silence beyond the strict timeout. It follows that a healthy but
+partitioned UAV *can* be wrongly declared dead. That is intended: the defence
+is quorum plus ownership reconciliation, not privileged knowledge. Preserve
 the threshold `max(2, floor((N - 1) / 2) + 1)`: the suspected UAV is excluded
 from `N - 1`, and one observer must never be able to declare a peer failed.
 Repeated votes make unchanged evidence retryable, while votes older than the
@@ -80,8 +86,13 @@ certificates remain available for graph-mediated retries, but their world-state
 consequence is applied only once.
 
 World truth may decide whether a UAV's software can execute, but inactive
-software must not mutate its private freshness or link-evidence state. That
-execution gate must not reveal physical health to any other replica.
+software must not mutate its private freshness state. That execution gate must
+not reveal physical health to any other replica.
+
+A declaration is evidence, not a verdict. First-hand contact outranks it: a
+snapshot received straight from a peer that was declared dead retracts that
+declaration locally, and a quorum of retractions withdraws it in the world.
+Keep declarations reversible.
 
 Task-claim epochs are scoped to one `(task_id, owner_agent_id)` publication
 stream and must never be compared across owners. A local store advances only

@@ -16,9 +16,9 @@ and interfaces change between prototypes.
   agreement and the architectural boundaries that must be preserved.
 - `--version` flag on the `eudis-swarm` CLI.
 - Packaging metadata: project URLs, classifiers and keywords.
-- `PeerStatus` with the receiver-local `HEARD`, `SILENT`, `UNREACHABLE`, and
-  quorum-backed `DECLARED_FAILED` meanings, while retaining
-  `PeerKnowledgeState` for snapshot freshness.
+- `PeerStatus` with the receiver-local `HEARD`, `SILENT` and quorum-backed
+  `DECLARED_FAILED` meanings, while retaining `PeerKnowledgeState` for snapshot
+  freshness.
 - Graph-mediated `FailureVote` and `FailureDeclaration` exchange with isolated
   receiver mailboxes, retryable votes and certificates, timeout-bounded vote
   evidence, and a strict-majority quorum with a two-voter minimum.
@@ -50,9 +50,19 @@ and interfaces change between prototypes.
   pass through the modeled one-hop transport before becoming remote evidence.
 - `Mission` now applies failure recovery only after receiving a validated
   quorum-backed declaration; silence and link loss remain non-authoritative.
-- Failure suspicion now requires a continuously reachable timeout interval;
-  restoring a link starts a fresh grace period rather than activating an old
-  stale observation immediately.
+- Failure detection no longer consults link ground truth. `PeerStatus.UNREACHABLE`,
+  `observe_link_state()` and `PeerStateTransport.synchronize_link_evidence()` are
+  removed: a receiver knows only what it heard and when, so a healthy but
+  partitioned UAV can now be wrongly declared dead.
+- A declaration is belief, not a kill switch. It sets `status` only; motion,
+  heartbeats and failure injection depend on `responsive` alone.
+- Declarations are reversible: first-hand contact retracts one locally, and a
+  quorum of retractions withdraws it in the world.
+- `Mission` is no longer the single writer of ownership. Allocation is refused
+  for any task whose lease is still valid in the assigning UAV's claim store,
+  and a UAV that loses reconciliation yields the task.
+- The playback trace (schema version 2) carries world truth, per-agent belief
+  and every replica's ownership view in one frame, with disputed tasks flagged.
 - Non-participating UAV software no longer advances or receives updates to its
   private freshness and link-evidence state.
 - Connectivity scoring now consumes only complete `HEARD` status, so raw-fresh

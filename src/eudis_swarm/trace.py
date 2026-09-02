@@ -19,6 +19,8 @@ from .simulation_events import (
     PeerStateEvent,
     PeerStateEventKind,
 )
+from .task import TaskOwnershipState
+from .task_claims import TaskClaimStore
 
 if TYPE_CHECKING:
     from .communication import CommunicationGraph
@@ -26,7 +28,7 @@ if TYPE_CHECKING:
     from .mission import Mission
 
 
-TRACE_SCHEMA_VERSION = 1
+TRACE_SCHEMA_VERSION = 2
 
 
 @dataclass(frozen=True, slots=True)
@@ -87,6 +89,21 @@ class TraceAgentState:
 
 
 @dataclass(frozen=True, slots=True)
+class TraceOwnershipView:
+    """One UAV's evidence-based belief about who owns one task.
+
+    This is belief, not world truth.  Two observers may legitimately disagree
+    while a partition holds; that disagreement is the point of recording it.
+    """
+
+    observer_agent_id: int
+    task_id: int
+    state: str
+    known_owner_agent_id: int | None
+    contested: bool
+
+
+@dataclass(frozen=True, slots=True)
 class TraceTaskState:
     task_id: int
     state: str
@@ -110,6 +127,8 @@ class TraceMetrics:
     component_count: int
     isolated_uavs: int
     stale_peer_observations: int
+    contested_task_count: int
+    disputed_task_count: int
     messages_attempted: int
     messages_delivered: int
     messages_dropped: int
@@ -123,6 +142,8 @@ class TraceFrame:
     tasks: tuple[TraceTaskState, ...]
     active_links: tuple[TraceLink, ...]
     components: tuple[tuple[int, ...], ...]
+    ownership: tuple[TraceOwnershipView, ...]
+    disputed_task_ids: tuple[int, ...]
     metrics: TraceMetrics
     events: tuple[TraceEvent, ...]
 
@@ -208,6 +229,8 @@ def _frame_from_dict(data: Mapping[str, Any]) -> TraceFrame:
         tasks=tasks,
         active_links=tuple(TraceLink(**item) for item in data["active_links"]),
         components=tuple(tuple(component) for component in data["components"]),
+        ownership=tuple(TraceOwnershipView(**item) for item in data["ownership"]),
+        disputed_task_ids=tuple(data["disputed_task_ids"]),
         metrics=TraceMetrics(**data["metrics"]),
         events=tuple(TraceEvent(**item) for item in data["events"]),
     )
@@ -232,12 +255,14 @@ class TraceRecorder:
         peer_events: list[PeerStateEvent],
         timestamp: float,
         positions: Mapping[int, Position] | None = None,
+        claim_stores: Mapping[int, TaskClaimStore] | None = None,
     ) -> None:
         new_events = self._collect_events(mission, communication_events, peer_events)
         agents = tuple(
             self._agent_state(agent.agent_id, mission, graph, peer_stores, positions)
             for agent in mission.ordered_agents
         )
+        ownership, disputed_task_ids = _ownership_views(claim_stores, timestamp)
         frame = TraceFrame(
             timestamp=timestamp,
             agents=agents,
@@ -263,6 +288,8 @@ class TraceRecorder:
             components=tuple(
                 tuple(sorted(component)) for component in graph.connected_components
             ),
+            ownership=ownership,
+            disputed_task_ids=disputed_task_ids,
             metrics=TraceMetrics(
                 completed_tasks=mission.metrics.completed_task_count,
                 total_tasks=mission.metrics.total_task_count,
@@ -271,6 +298,8 @@ class TraceRecorder:
                 component_count=len(graph.connected_components),
                 isolated_uavs=len(graph.isolated_agent_ids),
                 stale_peer_observations=sum(agent.stale_peer_count for agent in agents),
+                contested_task_count=sum(view.contested for view in ownership),
+                disputed_task_count=len(disputed_task_ids),
                 messages_attempted=mission.metrics.peer_messages_attempted,
                 messages_delivered=mission.metrics.peer_messages_delivered,
                 messages_dropped=mission.metrics.peer_messages_undelivered,
@@ -381,6 +410,48 @@ class TraceRecorder:
         )
         events.extend(_peer_trace_event(event) for event in peer_delta)
         return tuple(sorted(events, key=lambda event: (event.timestamp, event.kind)))
+
+
+def _ownership_views(
+    claim_stores: Mapping[int, TaskClaimStore] | None,
+    timestamp: float,
+) -> tuple[tuple[TraceOwnershipView, ...], tuple[int, ...]]:
+    """Read every replica's ownership belief and find where they disagree.
+
+    Only tasks a replica has evidence about are recorded, so an idle mission
+    costs nothing.  A task is *disputed* when replicas name different owners,
+    which is exactly the split-brain signature worth showing on a timeline.
+    """
+
+    if not claim_stores:
+        return (), ()
+
+    views: list[TraceOwnershipView] = []
+    owners_by_task: dict[int, set[int]] = {}
+    contested_task_ids: set[int] = set()
+    for observer_agent_id, store in sorted(claim_stores.items()):
+        for task_id in store.task_ids:
+            view = store.view(task_id, timestamp)
+            if view.state is TaskOwnershipState.UNCLAIMED:
+                continue
+            views.append(
+                TraceOwnershipView(
+                    observer_agent_id=observer_agent_id,
+                    task_id=task_id,
+                    state=view.state.value,
+                    known_owner_agent_id=view.known_owner_agent_id,
+                    contested=view.contested,
+                )
+            )
+            if view.contested:
+                contested_task_ids.add(task_id)
+            if view.known_owner_agent_id is not None:
+                owners_by_task.setdefault(task_id, set()).add(view.known_owner_agent_id)
+
+    disputed = {
+        task_id for task_id, owners in owners_by_task.items() if len(owners) > 1
+    }
+    return tuple(views), tuple(sorted(disputed | contested_task_ids))
 
 
 def _mission_trace_event(

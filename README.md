@@ -108,14 +108,21 @@ Modules: [`communication.py`](src/eudis_swarm/communication.py),
   receiver owns an isolated vote mailbox; locally originated declaration
   certificates are retained and retried over links that come back up.
 - **Receiver-local peer state.** One `PeerStateStore` per UAV holds delivered
-  `Heartbeat` snapshots, their receiver-local arrival time, per-peer link
-  evidence, and any applied declaration. Nothing is copied in from world truth.
+  `Heartbeat` snapshots, their receiver-local arrival time, and any applied
+  declaration. Nothing is copied in from world truth — in particular there is
+  no per-peer "is the link up" flag, because a radio cannot supply one.
 - **Freshness vs. status, kept apart.** `PeerKnowledgeState` is snapshot age
   (`UNKNOWN` / `FRESH` / `STALE`). `PeerStatus` interprets all local evidence as
-  `HEARD`, `SILENT`, `UNREACHABLE`, or `DECLARED_FAILED`.
-- **Communication loss does not imply UAV failure.** `STALE`, `UNKNOWN`, and
-  `UNREACHABLE` never become `FAILED`. A blocked but healthy UAV keeps moving
-  and completing tasks, and releases no work. Tests assert this directly.
+  `HEARD`, `SILENT`, or `DECLARED_FAILED`.
+- **Silence is ambiguous, and the swarm can be wrong.** Nothing local
+  distinguishes a jammed peer from a destroyed one, so a healthy but
+  partitioned UAV *can* be declared dead by a quorum. The defence is not
+  privileged knowledge but quorum, reversible declarations, and ownership
+  reconciliation — and the cost of being wrong is measured, not hidden.
+- **A declaration is belief, not a kill switch.** It never touches
+  `responsive`: a wrongly declared UAV keeps flying, keeps transmitting, and
+  keeps the task it does not know it lost. First-hand contact retracts the
+  declaration when the link returns.
 - **Quorum-based failure declaration.** For `N` configured UAVs the threshold is
   `required_votes = max(2, floor((N - 1) / 2) + 1)` — a strict majority of the
   possible voters with a two-vote floor. Swarms of fewer than three UAVs cannot

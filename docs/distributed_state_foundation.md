@@ -47,18 +47,19 @@ source Agent
   -> receiver-local freshness and status
 ```
 
-The link layer also exposes one narrow local fact through
-`PeerStateTransport.synchronize_link_evidence()`: whether a direct pair can
-currently deliver. It does not copy positions, connected components, physical
-health, or task truth into a peer store.
+The link layer exposes **no** local fact about link state. A receiver learns
+only what it actually receives: a delivered snapshot and the time it arrived.
+An earlier `synchronize_link_evidence()` adapter published a per-pair "can
+deliver" boolean into peer stores; it was removed because a radio cannot supply
+that fact, and its presence made false positives structurally impossible.
 
 Failure handling has two stages:
 
 1. A local replica may create a `FailureVote` only when it has a previously
-   delivered observation, the peer is locally `SILENT`, and the direct link has
-   remained continuously reachable for strictly longer than
-   `heartbeat_timeout`. The interval begins at the later of the observation's
-   receiver-local arrival time and the start of the current reachable period.
+   delivered observation and has heard nothing from that peer for strictly
+   longer than `heartbeat_timeout`, measured from the observation's
+   receiver-local arrival time. Because silence is ambiguous, this can suspect
+   a healthy peer across a partition, by design.
 2. A local replica may create a `FailureDeclaration` only after its own mailbox
    contains the required number of fresh votes, all referring to the same
    last-heartbeat timestamp and observed task ID. The declarer must be one of
@@ -118,26 +119,23 @@ Both enums are receiver-local, but they answer different questions.
 | --- | --- |
 | `HEARD` | A fresh snapshot was received recently and no stronger status applies. |
 | `SILENT` | No recent heartbeat evidence is available; this includes never-heard and timed-out cases. |
-| `UNREACHABLE` | The receiver's local link evidence says the direct peer link cannot currently deliver. |
 | `DECLARED_FAILED` | A validated quorum-backed failure declaration was applied locally. |
 
-The two dimensions intentionally overlap. For example, a last snapshot can
-still be `FRESH` while a newly blocked link makes `status_for(peer)` return
-`UNREACHABLE`. Conversely, an old snapshot can be `STALE` while the link is up,
-making the peer `SILENT`; only a full continuously reachable timeout can then
-make that evidence eligible for a suspicion vote, never a declaration by
-itself.
+There is deliberately no status meaning "the link is down". Cutting a link
+produces no local evidence whatsoever; only elapsed silence does, and that
+silence is indistinguishable from the peer having been destroyed.
 
-Status precedence is declaration, then link unreachability, then recent heard
-evidence, then silence. A successfully delivered new heartbeat refreshes the
-snapshot, supplies positive link evidence, and clears local silence. Only
+Status precedence is declaration, then recent heard evidence, then silence. A
+successfully delivered heartbeat refreshes the snapshot and clears local
+silence — and, if that peer had been declared failed, retracts the declaration,
+because first-hand contact outranks a second-hand certificate. Only
 `apply_failure_declaration()` can enter `DECLARED_FAILED`, and that method
 validates the voter set and configured quorum.
 
 The connectivity-aware allocator consumes `heard_observations`, not raw
 `fresh_observations`. A snapshot can therefore remain freshness-`FRESH` for
 diagnostics while being excluded from decisions because its complete status is
-`SILENT`, `UNREACHABLE`, or `DECLARED_FAILED`.
+`SILENT` or `DECLARED_FAILED`.
 
 Within `Simulation.run()`, the world orchestrator may use physical responsiveness
 only to decide whether a UAV's local software executes at a timestamp. A
@@ -479,7 +477,7 @@ failure-before-heartbeat ordering begins after startup.
 
 - Emitting a heartbeat does not update another UAV or the failure protocol;
   successful delivery does.
-- Cutting a link can produce `UNREACHABLE` and later `STALE`, but cannot by
+- Cutting a link produces no immediate local evidence, and later `STALE`, but cannot by
   itself produce `DECLARED_FAILED`.
 - A `SILENT` peer remains distinct from a failed peer until a valid vote quorum
   exists.

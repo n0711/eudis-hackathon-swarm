@@ -55,7 +55,7 @@ For each peer `k`:
 
 - `HEARD`: use the position in the last successfully delivered immutable
   snapshot;
-- `SILENT`, `UNREACHABLE`, or `DECLARED_FAILED`: exclude it.
+- `SILENT` or `DECLARED_FAILED`: exclude it.
 
 Raw freshness remains separately observable as `UNKNOWN`, `FRESH`, or `STALE`.
 `FRESH` is necessary but no longer sufficient for connectivity scoring because

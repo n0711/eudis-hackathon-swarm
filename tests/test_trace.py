@@ -6,11 +6,12 @@ The assertions keep observer data descriptive and separate from swarm decisions.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 
 from eudis_swarm.config import SimulationConfig
-from eudis_swarm.simulation import main, run_simulation
+from eudis_swarm.simulation import Simulation, main, run_simulation
 from eudis_swarm.trace import SimulationTrace
 
 
@@ -135,3 +136,78 @@ def test_cli_record_trace_writes_loadable_artifact(tmp_path) -> None:
     trace = SimulationTrace.read_json(destination)
     assert trace.metadata.allocation_policy == "distance"
     assert trace.frames[-1].metrics.completed_tasks == 20
+
+
+def test_trace_frame_carries_world_truth_belief_and_ownership_together() -> None:
+    """One frame now records all three layers, so divergence is replayable.
+
+    During the outage UAV 2 and UAV 3 each believe they own Task 20. Neither
+    can see the contest -- they are partitioned -- so the disagreement is only
+    visible by comparing replicas, which is exactly what the frame stores.
+    """
+
+    trace = (
+        Simulation(
+            SimulationConfig(
+                failure_time=100.0,
+                communication_range=130.0,
+                comm_fault_agent_id=2,
+                comm_fault_start=4.0,
+                comm_fault_end=8.0,
+            ),
+            capture_trace=True,
+        )
+        .run()
+        .trace
+    )
+    assert trace is not None
+    assert trace.schema_version == 2
+
+    disputed_frames = [frame for frame in trace.frames if frame.disputed_task_ids]
+    assert disputed_frames, "the split brain never appeared in the trace"
+
+    frame = disputed_frames[0]
+    assert frame.disputed_task_ids == (20,)
+
+    # world truth and belief live side by side in the same frame.
+    uav2 = next(agent for agent in frame.agents if agent.agent_id == 2)
+    assert uav2.responsive is True
+
+    claimants = {
+        view.observer_agent_id: view.known_owner_agent_id
+        for view in frame.ownership
+        if view.task_id == 20 and view.state == "OWNED_BY_SELF"
+    }
+    assert claimants == {2: 2, 3: 3}
+
+    # and the disagreement resolves by the end of the mission.
+    assert trace.frames[-1].disputed_task_ids == ()
+
+
+def test_ownership_survives_a_json_round_trip(tmp_path: Path) -> None:
+    original = (
+        Simulation(
+            SimulationConfig(
+                failure_time=100.0,
+                communication_range=130.0,
+                comm_fault_agent_id=2,
+                comm_fault_start=4.0,
+                comm_fault_end=8.0,
+            ),
+            capture_trace=True,
+        )
+        .run()
+        .trace
+    )
+    assert original is not None
+
+    destination = tmp_path / "ownership.trace.json"
+    original.write_json(destination)
+    restored = SimulationTrace.read_json(destination)
+
+    assert [frame.ownership for frame in restored.frames] == [
+        frame.ownership for frame in original.frames
+    ]
+    assert [frame.disputed_task_ids for frame in restored.frames] == [
+        frame.disputed_task_ids for frame in original.frames
+    ]

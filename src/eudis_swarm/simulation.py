@@ -206,6 +206,7 @@ class Simulation:
             self.peer_state_events,
             timestamp,
             positions,
+            self.task_claim_stores,
         )
 
     def _record_positions(
