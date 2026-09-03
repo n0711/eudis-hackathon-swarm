@@ -23,17 +23,22 @@ Trace capture is opt-in, so ordinary headless runs retain their previous runtime
 and memory behavior. Each immutable frame contains:
 
 - simulation time;
-- physical/coordinator UAV state, positions, current tasks, and direct neighbors;
-- task ownership and lifecycle state;
+- physical/observer UAV state, positions, cached task intents, and direct
+  neighbors;
+- mutable task lifecycle projections alongside every receiver's ownership view;
 - active canonical communication links and connected components;
 - receiver-local `UNKNOWN` / `FRESH` / `STALE` peer knowledge, including clearly
   labelled last-known snapshots;
-- cumulative mission, topology, freshness, and delivery metrics;
+- cumulative mission, topology, freshness, one-hop heartbeat delivery, and
+  classified protocol-gossip first-delivery, forwarding, duplicate, and
+  inactive-endpoint-deferral metrics;
 - structured mission, allocation, recovery, communication, and peer events.
 
-Allocation events reuse the allocator's recorded decision metadata. Connectivity
-decisions therefore expose travel distance, predicted peer degree, and predicted
-isolation without recomputing a decision in the UI.
+Allocation events reuse the recorded local-utility decision metadata.
+Connectivity decisions therefore expose travel distance, predicted peer degree,
+and predicted isolation without recomputing a decision in the UI. The displayed
+`current_task` is an execution-intent cache and `Task.assigned_agent` is an
+observer projection; neither field is task authority.
 
 ## Install and run
 
@@ -92,4 +97,6 @@ static debugging aid; it is not the preferred mission playback interface.
 - Trace size scales with frames × mission entities. This is appropriate for the
   current prototype sizes and avoids a database or streaming backend.
 - The dashboard is desktop-oriented and local; mobile, live sockets, 3D, GIS,
-  routing, relays, and new swarm behaviors are outside scope.
+  route planning, relay movement, and new swarm behaviours are outside scope.
+  Deterministic immutable-evidence flooding exists below the UI; its transport
+  receipts and counters remain observer data and are not fed back into decisions.

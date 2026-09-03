@@ -226,7 +226,7 @@ def test_new_peer_epoch_refreshes_stale_evidence_without_replaying_old_claim() -
     assert store.view(TASK_ID, 3.0).claim_id == renewal.claim_id
 
 
-def test_duplicate_old_future_and_equivocating_claims_are_safe() -> None:
+def test_duplicate_old_clock_skewed_and_equivocating_claims_are_safe() -> None:
     store = _store()
     current = _claim(9, epoch=2)
     assert store.receive_claim(current, 0.0) is True
@@ -244,9 +244,53 @@ def test_duplicate_old_future_and_equivocating_claims_are_safe() -> None:
     with pytest.raises(ValueError, match="conflicting equal-epoch"):
         store.receive_claim(equivocation, 3.0)
 
-    future = _claim(9, epoch=3, created_at=4.0)
-    with pytest.raises(ValueError, match="cannot follow receipt"):
-        store.receive_claim(future, 3.0)
+    clock_skewed = _claim(9, epoch=3, created_at=40.0)
+    assert store.receive_claim(clock_skewed, received_at=3.0) is True
+    skewed_view = store.view(TASK_ID, 3.0)
+    assert skewed_view.claim_id == clock_skewed.claim_id
+    assert skewed_view.claim_age == 0.0
+    assert skewed_view.claim_freshness is ClaimFreshness.FRESH
+
+
+def test_clock_skewed_release_uses_receiver_local_receipt_age() -> None:
+    losing_claim = _claim(9, epoch=4, created_at=100.0)
+    winning_claim = _claim(2, epoch=3, created_at=200.0)
+    release = TaskClaimRelease(
+        losing_claim=losing_claim,
+        winning_claim=winning_claim,
+        created_at=101.0,
+    )
+    store = _store()
+
+    assert store.receive_release(release, received_at=10.0) is True
+
+    at_freshness_boundary = store.view(TASK_ID, 12.0)
+    assert at_freshness_boundary.known_owner_agent_id == 2
+    assert at_freshness_boundary.claim_age == FRESHNESS_TIMEOUT
+    assert at_freshness_boundary.claim_freshness is ClaimFreshness.FRESH
+    assert {
+        observation.received_at
+        for observation in at_freshness_boundary.known_claim_observations
+    } == {10.0}
+
+    stale = store.view(TASK_ID, 12.0001)
+    assert stale.state is TaskOwnershipState.CLAIMED_BY_PEER_STALE
+    assert stale.claim_freshness is ClaimFreshness.STALE
+
+
+def test_clock_skewed_completion_uses_receiver_local_receipt_age() -> None:
+    claim = _claim(2, created_at=100.0)
+    completion = TaskCompletionEvidence(claim=claim, created_at=101.0)
+    store = _store()
+
+    assert store.receive_completion(completion, received_at=10.0) is True
+
+    view = store.view(TASK_ID, 12.0)
+    assert view.state is TaskOwnershipState.COMPLETE
+    assert view.completion == completion
+    assert view.claim_age == FRESHNESS_TIMEOUT
+    assert view.claim_freshness is ClaimFreshness.FRESH
+    assert view.known_claim_observations[0].received_at == 10.0
 
 
 def test_owner_epochs_are_local_and_never_override_owner_id_priority() -> None:

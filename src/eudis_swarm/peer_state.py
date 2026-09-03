@@ -1,7 +1,7 @@
 """Store the evidence that one UAV has actually received about its peers.
 
-Freshness, link reachability, and protocol-backed failure are kept separate so
-that silence can never silently become physical failure.
+Snapshot freshness, observed silence, and protocol-backed failure are kept
+separate so silence can never silently become physical failure.
 """
 
 from __future__ import annotations
@@ -42,13 +42,14 @@ class PeerObservation:
     received_at: float
 
     def __post_init__(self) -> None:
-        received_at = validate_timestamp(self.received_at, name="received_at")
-        if received_at < self.snapshot.timestamp:
-            raise ValueError("received_at cannot precede the snapshot timestamp")
+        # The snapshot timestamp belongs to the source while ``received_at``
+        # belongs to this receiver.  Clock skew makes their numeric ordering
+        # meaningless; freshness uses only the latter.
+        validate_timestamp(self.received_at, name="received_at")
 
 
 class PeerStateStore:
-    """Keep one UAV's observations, link evidence, and received declarations."""
+    """Keep one UAV's received observations and failure declarations."""
 
     def __init__(
         self,

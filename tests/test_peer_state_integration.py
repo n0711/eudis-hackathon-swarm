@@ -28,26 +28,26 @@ def _peer_signature(result: object) -> list[tuple[object, float, int, int]]:
     ]
 
 
-def test_outage_stales_peer_views_and_costs_the_isolated_uav_its_work() -> None:
+def test_outage_stales_peer_views_without_revoking_local_claims() -> None:
     result = Simulation(_communication_scenario()).run()
     metrics = result.metrics
     isolated_agent = result.mission.agents[2]
 
     assert metrics.mission_completed is True
     assert metrics.completed_task_count == 20
-    assert metrics.simulation_duration == 10.75
+    assert metrics.simulation_duration == 12.0
     # the quorum misreads jamming as death, then retracts on reconnection.
     assert metrics.declaration_retraction_count == 1
     assert metrics.failed_agent_count == 0
-    assert metrics.orphaned_task_count == 1
-    assert metrics.reassigned_task_count == 1
+    assert metrics.orphaned_task_count == 0
+    assert metrics.reassigned_task_count == 0
     assert isolated_agent.failure_injected_at is None
     assert isolated_agent.responsive is True
-    assert metrics.belief_divergence_event_count == 1
-    assert metrics.duplicated_task_completion_count == 1
+    assert metrics.belief_divergence_event_count == 0
+    assert metrics.duplicated_task_completion_count == 0
 
-    assert metrics.peer_messages_attempted == 132
-    assert metrics.peer_messages_delivered == 108
+    assert metrics.peer_messages_attempted == 156
+    assert metrics.peer_messages_delivered == 132
     assert metrics.peer_messages_undelivered == 24
     assert metrics.peer_state_stale_transition_count == 6
     assert metrics.peer_state_refresh_transition_count == 6

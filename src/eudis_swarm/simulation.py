@@ -15,10 +15,16 @@ from typing import Mapping, Sequence
 
 from . import __version__
 from .agent import Agent, AgentStatus, Heartbeat, Position
-from .communication import CommunicationGraph, CommunicationUpdate
+from .communication import CommunicationGraph, CommunicationUpdate, RegionJammer
 from .config import SimulationConfig
 from .failure_manager import FailureDeclaration, FailureManager
-from .messaging import DeliveryBatch, PeerStateTransport, TaskClaimTransport
+from .messaging import (
+    DeliveryBatch,
+    PeerStateTransport,
+    ProtocolDeliveryBatch,
+    TaskClaimTransport,
+    TaskProtocolDeliveryBatch,
+)
 from .metrics import SimulationMetrics
 from .mission import Mission
 from .peer_state import PeerStateStore
@@ -28,9 +34,15 @@ from .simulation_events import (
     PeerStateEvent,
     PeerStateEventKind,
 )
-from .task import Task
-from .task_allocator import CommunicationAwareTaskAllocator, TaskAllocator
+from .task import Task, TaskOwnershipState
+from .task_allocator import Allocation, CommunicationAwareTaskAllocator, TaskAllocator
 from .task_claims import TaskClaimStore
+from .task_utility import (
+    LocalTaskUtility,
+    ReceiverLocalTaskUtility,
+    TaskObjective,
+    TaskUtilityWeights,
+)
 from .trace import SimulationTrace, TraceRecorder
 from .validation import validate_timestamp
 
@@ -161,6 +173,29 @@ class Simulation:
         self.task_claim_transport = TaskClaimTransport(
             self.communication_graph, self.task_claim_stores
         )
+        self.task_objectives = tuple(
+            sorted(
+                (
+                    TaskObjective(task_id=task.task_id, position=task.position)
+                    for task in selected_tasks
+                ),
+                key=lambda objective: objective.task_id,
+            )
+        )
+        self._task_objectives_by_id = {
+            objective.task_id: objective for objective in self.task_objectives
+        }
+        utility_weights = TaskUtilityWeights()
+        if config.allocation_policy == "connectivity":
+            # One locally observed degree step dominates any in-area travel
+            # difference, preserving the existing connectivity-first option
+            # without giving the scorer graph access.
+            utility_weights = TaskUtilityWeights(
+                distance=1.0,
+                communication=(2.0 * math.hypot(config.area_width, config.area_height)),
+            )
+        self.task_utility = ReceiverLocalTaskUtility(utility_weights)
+        self._pending_task_utilities: dict[tuple[int, int], LocalTaskUtility] = {}
         allocator = (
             TaskAllocator()
             if config.allocation_policy == "distance"
@@ -179,6 +214,7 @@ class Simulation:
             ),
             metrics=metrics,
             task_claim_stores=self.task_claim_stores,
+            distributed_task_control=True,
         )
         self._history: dict[int, list[tuple[float, Position]]] = {
             agent.agent_id: [(0.0, agent.position)] for agent in selected_agents
@@ -230,37 +266,40 @@ class Simulation:
             self._history[agent.agent_id].append((timestamp, position))
         self._last_position_record_time = timestamp
 
-    def _advance_agents(self, elapsed: float) -> None:
-        for agent in self.mission.ordered_agents:
-            # a wrongly declared UAV is still flying its task: the coordinator's
-            # belief does not reach the vehicle.
-            if (
-                agent.current_task is None
-                or not agent.responsive
-                or (
-                    agent.status is not AgentStatus.ACTIVE
-                    and not agent.wrongly_declared
-                )
-            ):
-                continue
-            task = self.mission.tasks[agent.current_task]
-            agent.move_toward(task.position, elapsed)
+    def _executable_task_id(self, agent: Agent, timestamp: float) -> int | None:
+        """Resolve an execution intent through this UAV's own claim replica."""
 
-    def _project_positions(self, elapsed: float) -> dict[int, Position]:
+        task_id = agent.current_task
+        if task_id is None or not self.mission.task_is_executable(
+            agent.agent_id,
+            task_id,
+            timestamp,
+        ):
+            return None
+        return task_id
+
+    def _advance_agents(self, elapsed: float, timestamp: float) -> None:
+        for agent in self.mission.ordered_agents:
+            task_id = self._executable_task_id(agent, timestamp)
+            if task_id is None:
+                continue
+            objective = self._task_objectives_by_id[task_id]
+            agent.move_toward(objective.position, elapsed)
+
+    def _project_positions(
+        self, elapsed: float, timestamp: float
+    ) -> dict[int, Position]:
         """Project a graph-only snapshot without mutating physical agent state."""
 
         if elapsed < 0.0:
             raise ValueError("elapsed must be non-negative")
         positions: dict[int, Position] = {}
         for agent in self.mission.ordered_agents:
-            if (
-                agent.status is not AgentStatus.ACTIVE
-                or agent.current_task is None
-                or not agent.responsive
-            ):
+            task_id = self._executable_task_id(agent, timestamp)
+            if task_id is None:
                 positions[agent.agent_id] = agent.position
                 continue
-            target = self.mission.tasks[agent.current_task].position
+            target = self._task_objectives_by_id[task_id].position
             distance = agent.distance_to(target)
             if distance == 0.0:
                 positions[agent.agent_id] = agent.position
@@ -276,28 +315,24 @@ class Simulation:
     def _complete_arrivals(self, timestamp: float) -> int:
         completed = 0
         for agent in self.mission.ordered_agents:
-            # a wrongly declared UAV is still flying its task: the coordinator's
-            # belief does not reach the vehicle.
-            if (
-                agent.current_task is None
-                or not agent.responsive
-                or (
-                    agent.status is not AgentStatus.ACTIVE
-                    and not agent.wrongly_declared
-                )
-            ):
+            task_id = self._executable_task_id(agent, timestamp)
+            if task_id is None:
                 continue
-            task = self.mission.tasks[agent.current_task]
-            if agent.distance_to(task.position) <= self.config.completion_tolerance:
-                self.mission.complete_task(agent.agent_id, task.task_id, timestamp)
+            objective = self._task_objectives_by_id[task_id]
+            if (
+                agent.distance_to(objective.position)
+                <= self.config.completion_tolerance
+            ):
+                self.mission.complete_task(agent.agent_id, task_id, timestamp)
                 completed += 1
         return completed
 
     def _complete_initial_arrivals(self) -> None:
         """Resolve zero-time work without introducing a movement boundary."""
 
+        self._exchange_claim_evidence(0.0)
         while self._complete_arrivals(0.0):
-            self.mission.allocate_tasks(0.0)
+            self._exchange_claim_evidence(0.0)
 
     def _communication_event(
         self,
@@ -421,54 +456,256 @@ class Simulation:
             agent.agent_id for agent in self.mission.ordered_agents if agent.responsive
         )
 
-    def _exchange_claim_evidence(self, timestamp: float) -> None:
-        """Publish and reconcile replicated task ownership over active links.
+    def _record_protocol_delivery(
+        self,
+        timestamp: float,
+        batch: ProtocolDeliveryBatch | TaskProtocolDeliveryBatch,
+    ) -> None:
+        """Expose gossip activity to observer metrics, never decision state."""
 
-        Every responsive UAV renews the lease on work it still believes it
-        owns, and publishes claims, tombstones and completion evidence to
-        whoever it can currently reach.  When a partition heals the competing
-        claims meet, every replica applies the same pure decision, and the
-        losing owner gives the task up.
-        """
+        self.mission.metrics.record_protocol_message_batch(
+            timestamp,
+            attempted=batch.attempted,
+            delivered=batch.delivered,
+            undelivered=batch.undelivered,
+            forwarded=batch.forwarded,
+            duplicates_suppressed=batch.duplicates_suppressed,
+            useful_first_deliveries=batch.useful_first_deliveries,
+            duplicate_source_publications=batch.duplicate_source_publications,
+            duplicate_route_suppressions=batch.duplicate_route_suppressions,
+            inactive_endpoint_deferrals=batch.inactive_endpoint_deferrals,
+        )
 
-        participants = self._participating_agent_ids()
-        for agent_id in participants:
-            store = self.task_claim_stores[agent_id]
-            agent = self.mission.agents[agent_id]
-            if agent.current_task is not None and store.owns_task(
-                agent.current_task, timestamp
+    def _local_communication_costs(self, agent_id: int) -> dict[int, float]:
+        """Derive optional task costs from this receiver's delivered peer copies."""
+
+        if self.config.allocation_policy != "connectivity":
+            return {}
+        heard_positions = tuple(
+            observation.snapshot.position
+            for observation in self.peer_state_stores[agent_id].heard_observations
+        )
+        maximum_peer_count = len(self.mission.agents) - 1
+        costs: dict[int, float] = {}
+        for objective in self.task_objectives:
+            predicted_degree = sum(
+                math.hypot(
+                    objective.position[0] - peer_position[0],
+                    objective.position[1] - peer_position[1],
+                )
+                <= self.config.communication_range
+                for peer_position in heard_positions
+            )
+            costs[objective.task_id] = float(maximum_peer_count - predicted_degree)
+        return costs
+
+    def _rank_local_objectives(
+        self,
+        agent: Agent,
+        objectives: Sequence[TaskObjective],
+    ) -> tuple[LocalTaskUtility, ...]:
+        return self.task_utility.rank(
+            agent.agent_id,
+            agent.position,
+            objectives,
+            communication_cost=self._local_communication_costs(agent.agent_id),
+        )
+
+    def _create_local_claim_intents(self, timestamp: float) -> int:
+        """Batch independent claim choices from pre-mutation receiver-local views."""
+
+        intents: list[LocalTaskUtility] = []
+        for agent in self.mission.ordered_agents:
+            if not agent.responsive or agent.current_task is not None:
+                continue
+            store = self.task_claim_stores[agent.agent_id]
+            if any(
+                store.view(task_id, timestamp).state is TaskOwnershipState.OWNED_BY_SELF
+                for task_id in store.task_ids
             ):
-                store.renew_claim(agent.current_task, timestamp)
+                continue
+            candidates = tuple(
+                objective
+                for objective in self.task_objectives
+                if store.can_create_claim(objective.task_id, timestamp)
+            )
+            ranked = self._rank_local_objectives(agent, candidates)
+            if ranked:
+                intents.append(ranked[0])
 
-        for agent_id in participants:
-            store = self.task_claim_stores[agent_id]
+        # Applying after every receiver has chosen prevents Python iteration order
+        # from acting as a hidden central allocator.
+        for utility in intents:
+            store = self.task_claim_stores[utility.agent_id]
+            store.create_claim(utility.task_id, timestamp)
+            self._pending_task_utilities[(utility.agent_id, utility.task_id)] = utility
+            self.mission.record_task_claim(
+                utility.agent_id,
+                utility.task_id,
+                timestamp,
+            )
+        return len(intents)
+
+    def _gossip_task_evidence(
+        self,
+        timestamp: float,
+        participants: tuple[int, ...],
+    ) -> None:
+        claims = tuple(
+            claim
+            for agent_id in participants
+            for claim in self.task_claim_stores[agent_id].claims_for_broadcast(
+                timestamp
+            )
+        )
+        releases = tuple(
+            release
+            for agent_id in participants
+            for release in self.task_claim_stores[agent_id].releases_for_broadcast()
+        )
+        completions = tuple(
+            completion
+            for agent_id in participants
+            for completion in self.task_claim_stores[
+                agent_id
+            ].completions_for_broadcast()
+        )
+        batches = (
             self.task_claim_transport.deliver_claims(
-                store.claims_for_broadcast(timestamp),
+                claims,
                 timestamp,
                 receiving_agent_ids=participants,
-            )
+            ),
             self.task_claim_transport.deliver_releases(
-                store.releases_for_broadcast(),
+                releases,
                 timestamp,
                 receiving_agent_ids=participants,
-            )
+            ),
             self.task_claim_transport.deliver_completions(
-                store.completions_for_broadcast(),
+                completions,
                 timestamp,
                 receiving_agent_ids=participants,
-            )
+            ),
+        )
+        for batch in batches:
+            self._record_protocol_delivery(timestamp, batch)
 
+    def _resolve_claims_and_stand_down(
+        self,
+        timestamp: float,
+        participants: tuple[int, ...],
+    ) -> int:
+        local_conflict_losses: set[tuple[int, int]] = set()
         for agent_id in participants:
             store = self.task_claim_stores[agent_id]
             store.advance_time(timestamp)
             for decision in store.reconcile_all(timestamp):
-                if decision.local_release is None:
-                    continue
-                self.mission.yield_contested_task(
-                    agent_id,
-                    decision.local_release.losing_claim.task_id,
-                    timestamp,
-                )
+                if decision.local_release is not None:
+                    local_conflict_losses.add((agent_id, decision.task_id))
+
+        stopped = 0
+        for agent_id in participants:
+            agent = self.mission.agents[agent_id]
+            task_id = agent.current_task
+            if task_id is None or self.task_claim_stores[agent_id].owns_task(
+                task_id, timestamp
+            ):
+                continue
+            if self.mission.stand_down_unowned_task(
+                agent_id,
+                task_id,
+                timestamp,
+                contested=(agent_id, task_id) in local_conflict_losses,
+            ):
+                stopped += 1
+        return stopped
+
+    def _allocation_from_utility(self, utility: LocalTaskUtility) -> Allocation:
+        if self.config.allocation_policy == "distance":
+            return Allocation(
+                agent_id=utility.agent_id,
+                task_id=utility.task_id,
+                distance=utility.travel_cost,
+            )
+        maximum_peer_count = len(self.mission.agents) - 1
+        predicted_degree = maximum_peer_count - round(utility.communication_cost)
+        return Allocation(
+            agent_id=utility.agent_id,
+            task_id=utility.task_id,
+            distance=utility.travel_cost,
+            policy="connectivity",
+            predicted_peer_degree=predicted_degree,
+            predicted_isolation=predicted_degree == 0,
+        )
+
+    def _activate_local_owners(self, timestamp: float) -> int:
+        activated = 0
+        for agent in self.mission.ordered_agents:
+            if not agent.responsive or agent.current_task is not None:
+                continue
+            store = self.task_claim_stores[agent.agent_id]
+            owned_objectives = tuple(
+                objective
+                for objective in self.task_objectives
+                if store.view(objective.task_id, timestamp).state
+                is TaskOwnershipState.OWNED_BY_SELF
+            )
+            ranked = self._rank_local_objectives(agent, owned_objectives)
+            if not ranked:
+                continue
+            selected = ranked[0]
+            for surplus in ranked[1:]:
+                store.release_claim(surplus.task_id, timestamp)
+            if not self.mission.activate_claimed_task(
+                agent.agent_id,
+                selected.task_id,
+                timestamp,
+            ):
+                continue
+            utility = self._pending_task_utilities.pop(
+                (agent.agent_id, selected.task_id),
+                selected,
+            )
+            self.mission.metrics.record_allocation(
+                self._allocation_from_utility(utility),
+                timestamp,
+            )
+            activated += 1
+        return activated
+
+    def _exchange_claim_evidence(self, timestamp: float) -> None:
+        """Run deterministic local claim/gossip/reconcile/execute rounds."""
+
+        participants = self._participating_agent_ids()
+        for agent_id in participants:
+            self.task_claim_stores[agent_id].advance_time(timestamp)
+
+        # Any pointer invalidated by expiry, a release, or completion is removed
+        # before renewal and before it can authorize another physical action.
+        self._resolve_claims_and_stand_down(timestamp, participants)
+        for agent_id in participants:
+            agent = self.mission.agents[agent_id]
+            task_id = self._executable_task_id(agent, timestamp)
+            if task_id is None:
+                continue
+            view = self.task_claim_stores[agent_id].view(task_id, timestamp)
+            if (
+                view.claim_age is not None
+                and view.claim_age >= self.task_claim_stores[agent_id].freshness_timeout
+            ):
+                self.task_claim_stores[agent_id].renew_claim(task_id, timestamp)
+
+        # One timestamp may need several claim waves: simultaneous candidates can
+        # collide, converge, and let losers replan without moving in between.
+        for _ in range(len(self.task_objectives) + len(participants) + 1):
+            created = self._create_local_claim_intents(timestamp)
+            self._gossip_task_evidence(timestamp, participants)
+            stopped = self._resolve_claims_and_stand_down(timestamp, participants)
+            activated = self._activate_local_owners(timestamp)
+            if created == 0 and stopped == 0 and activated == 0:
+                break
+        else:
+            raise RuntimeError("local task-claim rounds did not reach a fixed point")
 
     def _exchange_failure_evidence(
         self, timestamp: float
@@ -481,12 +718,13 @@ class Simulation:
             timestamp,
             participating_agent_ids=participants,
         )
-        self.peer_state_transport.deliver_failure_votes(
+        vote_batch = self.peer_state_transport.deliver_failure_votes(
             votes,
             manager,
             timestamp,
             receiving_agent_ids=participants,
         )
+        self._record_protocol_delivery(timestamp, vote_batch)
         declarations = manager.detect_declarations(
             timestamp,
             participating_agent_ids=participants,
@@ -496,11 +734,12 @@ class Simulation:
         outgoing_declarations = manager.declarations_for_broadcast(
             participating_agent_ids=participants,
         )
-        self.peer_state_transport.deliver_failure_declarations(
+        declaration_batch = self.peer_state_transport.deliver_failure_declarations(
             outgoing_declarations,
             timestamp,
             receiving_agent_ids=participants,
         )
+        self._record_protocol_delivery(timestamp, declaration_batch)
         self._apply_retractions(timestamp)
         return declarations
 
@@ -553,6 +792,24 @@ class Simulation:
             timestamp,
         )
 
+    def _active_blocked_links(
+        self, positions: Mapping[int, Position], timestamp: float
+    ) -> frozenset[tuple[int, int]]:
+        """Combine static blocked links with any region jammer active right now."""
+
+        blocked: set[tuple[int, int]] = set(self.config.blocked_links)
+        jammer = self.config.region_jammer
+        if jammer is not None and jammer.active_at(timestamp):
+            for (
+                source_agent_id,
+                destination_agent_id,
+            ) in self.communication_graph.pair_keys:
+                if jammer.blocks_link(
+                    positions[source_agent_id], positions[destination_agent_id]
+                ):
+                    blocked.add((source_agent_id, destination_agent_id))
+        return frozenset(blocked)
+
     def _update_communication_graph(
         self,
         timestamp: float,
@@ -574,6 +831,7 @@ class Simulation:
         update = self.communication_graph.update(
             observed_positions,
             blocked_agent_ids=self._blocked_communication_agents,
+            blocked_links=self._active_blocked_links(observed_positions, timestamp),
         )
         self._last_communication_update = timestamp
         observed_unreachable_ids = (
@@ -733,6 +991,15 @@ class Simulation:
                 and self.config.comm_fault_end > current_time + epsilon
             ):
                 event_times.append(self.config.comm_fault_end)
+            if self.config.region_jammer is not None:
+                # landing exactly on the jammer's edges keeps the partition it
+                # creates aligned to its configured window.
+                for jammer_edge in (
+                    self.config.region_jammer.start_time,
+                    self.config.region_jammer.end_time,
+                ):
+                    if jammer_edge > current_time + epsilon:
+                        event_times.append(jammer_edge)
             timestamp = validate_timestamp(
                 round(
                     min(
@@ -755,12 +1022,16 @@ class Simulation:
                 motion_due or heartbeat_due or failure_due or maximum_time_due
             )
             if mission_boundary:
-                self._advance_agents(timestamp - last_physical_update_time)
+                self._advance_agents(
+                    timestamp - last_physical_update_time,
+                    timestamp,
+                )
                 last_physical_update_time = timestamp
                 communication_positions: Mapping[int, Position] | None = None
             else:
                 communication_positions = self._project_positions(
-                    timestamp - last_physical_update_time
+                    timestamp - last_physical_update_time,
+                    timestamp,
                 )
 
             # a failure scheduled on a boundary wins over heartbeat emission and
@@ -802,10 +1073,13 @@ class Simulation:
                     next_heartbeat += self.config.heartbeat_interval
 
             declarations = self._exchange_failure_evidence(timestamp)
-            self._exchange_claim_evidence(timestamp)
             self.mission.detect_and_recover(timestamp, declarations)
-            self._complete_arrivals(timestamp)
-            self.mission.allocate_tasks(timestamp)
+            self._exchange_claim_evidence(timestamp)
+            completed_now = self._complete_arrivals(timestamp)
+            if completed_now:
+                # Completion evidence is seeded before the finish check, and
+                # newly idle UAVs select another intent at the same timestamp.
+                self._exchange_claim_evidence(timestamp)
             self._record_positions(timestamp)
             self.mission.assert_consistent()
 
@@ -908,6 +1182,21 @@ def _parser() -> argparse.ArgumentParser:
         "delivery probability using the run seed",
     )
     parser.add_argument(
+        "--blocked-link",
+        action="append",
+        default=None,
+        metavar="A:B",
+        help="permanently block the undirected link between UAVs A and B (repeatable)",
+    )
+    parser.add_argument(
+        "--jammer",
+        type=str,
+        default=None,
+        metavar="X,Y,RADIUS,T_START,T_END",
+        help="a circular jamming region: links whose midpoint falls inside the "
+        "disc are down while T_START <= t < T_END",
+    )
+    parser.add_argument(
         "--comm-fault-agent",
         type=int,
         default=None,
@@ -945,6 +1234,36 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _parse_blocked_link(spec: str) -> tuple[int, int]:
+    """Parse one ``A:B`` blocked-link CLI value into a UAV ID pair."""
+
+    endpoints = spec.split(":")
+    if len(endpoints) != 2:
+        raise ValueError(f"--blocked-link expects 'A:B', got {spec!r}")
+    try:
+        left_agent_id, right_agent_id = (int(part) for part in endpoints)
+    except ValueError:
+        raise ValueError(
+            f"--blocked-link endpoints must be integers, got {spec!r}"
+        ) from None
+    return (left_agent_id, right_agent_id)
+
+
+def _parse_jammer(spec: str) -> RegionJammer:
+    """Parse an ``X,Y,RADIUS,T_START,T_END`` jammer CLI value."""
+
+    fields = spec.split(",")
+    if len(fields) != 5:
+        raise ValueError("--jammer expects 'X,Y,RADIUS,T_START,T_END'")
+    try:
+        center_x, center_y, radius, start_time, end_time = (
+            float(field) for field in fields
+        )
+    except ValueError:
+        raise ValueError("--jammer values must be numbers") from None
+    return RegionJammer(center_x, center_y, radius, start_time, end_time)
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = _parser()
     arguments = parser.parse_args(argv)
@@ -961,6 +1280,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             communication_range=arguments.communication_range,
             link_model=arguments.link_model,
             stochastic_delivery=arguments.stochastic_delivery,
+            blocked_links=frozenset(
+                _parse_blocked_link(spec) for spec in (arguments.blocked_link or ())
+            ),
+            region_jammer=(
+                None if arguments.jammer is None else _parse_jammer(arguments.jammer)
+            ),
             comm_fault_agent_id=arguments.comm_fault_agent,
             comm_fault_start=arguments.comm_fault_start,
             comm_fault_end=arguments.comm_fault_end,

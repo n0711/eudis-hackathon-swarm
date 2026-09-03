@@ -132,7 +132,8 @@ def test_cut_claim_delivery_ages_fresh_evidence_to_stale_without_freeing_task() 
 
     graph.update(positions, blocked_links={(1, 2)})
     dropped = transport.deliver_claims((claim,), 1.0)
-    assert (dropped.attempted, dropped.delivered, dropped.undelivered) == (1, 0, 1)
+    assert (dropped.attempted, dropped.delivered, dropped.undelivered) == (0, 0, 0)
+    assert dropped.duplicates_suppressed == 1
     assert dropped.receipts == ()
 
     assert stores[2].advance_time(FRESHNESS_TIMEOUT) == ()
@@ -157,7 +158,7 @@ def test_balanced_partition_delivers_within_components_and_drops_cross_cut() -> 
     batch = transport.deliver_claims((left_claim, right_claim), 0.0)
 
     assert graph.connected_components == (frozenset({1, 2}), frozenset({3, 4}))
-    assert (batch.attempted, batch.delivered, batch.undelivered) == (6, 2, 4)
+    assert (batch.attempted, batch.delivered, batch.undelivered) == (10, 2, 8)
     assert [
         (receipt.source_agent_id, receipt.receiver_agent_id)
         for receipt in batch.receipts
@@ -199,7 +200,8 @@ def test_reconnect_makes_all_replicas_contested_before_reconciliation() -> None:
     batch = transport.deliver_claims((left_claim, right_claim), 1.0)
 
     assert graph.is_fully_connected is True
-    assert (batch.attempted, batch.delivered, batch.undelivered) == (6, 6, 0)
+    assert (batch.attempted, batch.delivered, batch.undelivered) == (4, 4, 0)
+    assert batch.duplicates_suppressed > 0
     assert sum(receipt.changed for receipt in batch.receipts) == 4
     for store in stores.values():
         view = store.view(TASK_ID, 1.0)
@@ -253,7 +255,7 @@ def test_opposite_transport_arrival_orders_reconcile_to_the_same_winner() -> Non
     assert second_stores[4].view(TASK_ID, 1.0).known_owner_agent_id == 1
 
 
-def test_loser_release_is_graph_gated_and_converges_after_retry() -> None:
+def test_loser_release_uses_an_alternate_multi_hop_path() -> None:
     positions, graph, stores, transport, _, _ = _reconnected_contest()
     losing_decision = stores[3].reconcile(TASK_ID, 2.0)
     assert losing_decision is not None
@@ -266,21 +268,24 @@ def test_loser_release_is_graph_gated_and_converges_after_retry() -> None:
 
     graph.update(positions, blocked_links={(3, 4)})
     partial = transport.deliver_releases((release,), 2.0)
-    assert (partial.attempted, partial.delivered, partial.undelivered) == (3, 2, 1)
-    assert [receipt.receiver_agent_id for receipt in partial.receipts] == [1, 2]
+    assert (partial.attempted, partial.delivered, partial.undelivered) == (4, 3, 1)
+    assert [receipt.receiver_agent_id for receipt in partial.receipts] == [1, 2, 4]
     assert all(
         receipt.kind is TaskProtocolMessageKind.RELEASE for receipt in partial.receipts
     )
-    assert stores[4].view(TASK_ID, 2.0).state is TaskOwnershipState.CONTESTED
+    relayed = partial.receipts[-1]
+    assert relayed.origin_agent_id == 3
+    assert relayed.forwarder_agent_id == 1
+    assert relayed.hop_count == 2
+    assert partial.forwarded == 1
+    assert stores[4].view(TASK_ID, 2.0).known_owner_agent_id == 1
 
     graph.update(positions)
     retry = transport.deliver_releases((release,), 3.0)
-    assert (retry.attempted, retry.delivered, retry.undelivered) == (3, 3, 0)
-    assert [(item.receiver_agent_id, item.changed) for item in retry.receipts] == [
-        (1, False),
-        (2, False),
-        (4, True),
-    ]
+    assert (retry.attempted, retry.delivered, retry.undelivered) == (0, 0, 0)
+    # Both the resubmitted release and its obsolete pending direct route are
+    # suppressed after UAV 4 already learned the release through UAV 1.
+    assert retry.duplicates_suppressed == 2
     assert sum(store.owns_task(TASK_ID, 3.0) for store in stores.values()) == 1
     assert stores[1].owns_task(TASK_ID, 3.0) is True
     assert all(
@@ -302,9 +307,10 @@ def test_older_and_duplicate_claims_cannot_resurrect_released_ownership() -> Non
     delayed = transport.deliver_claims((old_loser, current_loser), 2.0)
     duplicate_release = transport.deliver_releases((release,), 2.0)
 
-    assert (delayed.attempted, delayed.delivered, delayed.undelivered) == (6, 6, 0)
+    assert (delayed.attempted, delayed.delivered, delayed.undelivered) == (3, 3, 0)
     assert all(receipt.changed is False for receipt in delayed.receipts)
-    assert all(receipt.changed is False for receipt in duplicate_release.receipts)
+    assert duplicate_release.receipts == ()
+    assert duplicate_release.duplicates_suppressed == 1
     assert stores[3].owns_task(TASK_ID, 2.0) is False
     assert all(
         store.view(TASK_ID, 2.0).known_owner_agent_id == 1 for store in stores.values()
@@ -323,7 +329,7 @@ def test_delivered_completion_remains_absorbing_after_conflicting_claims() -> No
         partition_delivery.attempted,
         partition_delivery.delivered,
         partition_delivery.undelivered,
-    ) == (3, 1, 2)
+    ) == (5, 1, 4)
     right_new = stores[3].renew_claim(TASK_ID, 1.0)
     transport.deliver_claims((right_new,), 1.0)
 
@@ -333,12 +339,8 @@ def test_delivered_completion_remains_absorbing_after_conflicting_claims() -> No
         completion_delivery.attempted,
         completion_delivery.delivered,
         completion_delivery.undelivered,
-    ) == (3, 3, 0)
-    assert [receipt.changed for receipt in completion_delivery.receipts] == [
-        False,
-        True,
-        True,
-    ]
+    ) == (2, 2, 0)
+    assert [receipt.changed for receipt in completion_delivery.receipts] == [True, True]
     assert all(
         receipt.kind is TaskProtocolMessageKind.COMPLETION
         for receipt in completion_delivery.receipts
@@ -354,7 +356,7 @@ def test_delivered_completion_remains_absorbing_after_conflicting_claims() -> No
         assert store.can_create_claim(TASK_ID, 20.0) is False
 
 
-def test_transport_rejects_future_sources_receivers_and_uninitialized_graph() -> None:
+def test_transport_accepts_skewed_source_clocks_but_rejects_bad_routing() -> None:
     agent_ids = (1, 2)
     positions = {agent_id: (0.0, 0.0) for agent_id in agent_ids}
     graph = CommunicationGraph(agent_ids, communication_range=1.0)
@@ -382,20 +384,17 @@ def test_transport_rejects_future_sources_receivers_and_uninitialized_graph() ->
             ),
             0.0,
         )
-    with pytest.raises(ValueError, match="creation timestamp cannot follow"):
-        transport.deliver_claims(
-            (
-                TaskClaim(
-                    task_id=TASK_ID,
-                    owner_agent_id=1,
-                    epoch=2,
-                    created_at=1.0,
-                    freshness_timeout=FRESHNESS_TIMEOUT,
-                    lease_timeout=LEASE_TIMEOUT,
-                ),
-            ),
-            0.5,
-        )
+    skewed = TaskClaim(
+        task_id=TASK_ID,
+        owner_agent_id=1,
+        epoch=2,
+        created_at=100.0,
+        freshness_timeout=FRESHNESS_TIMEOUT,
+        lease_timeout=LEASE_TIMEOUT,
+    )
+    batch = transport.deliver_claims((skewed,), 0.5)
+    assert batch.delivered == 1
+    assert stores[2].view(TASK_ID, 0.5).claim_age == 0.0
 
 
 def test_transport_constructor_rejects_mismatched_receiver_stores() -> None:
@@ -426,6 +425,39 @@ def test_transport_constructor_rejects_mismatched_receiver_stores() -> None:
     }
     with pytest.raises(ValueError, match="one lease policy"):
         TaskClaimTransport(graph, mismatched_policy)
+
+
+def test_transport_rejects_wrong_message_kind_without_poisoning_its_ledger() -> None:
+    _, _, stores, transport = _network((1, 2))
+    stores[1].create_claim(TASK_ID, 0.0)
+    release = stores[1].release_claim(TASK_ID, 0.5)
+
+    with pytest.raises(TypeError, match="only TaskClaim"):
+        transport.deliver_claims((release,), 0.5)  # type: ignore[arg-type]
+
+    batch = transport.deliver_releases((release,), 0.5)
+    assert batch.delivered == 1
+    assert len(transport.seen_message_ids(2)) == 1
+
+
+def test_invalid_policy_is_rejected_before_persistent_gossip_state_changes() -> None:
+    _, _, stores, transport = _network((1, 2))
+    invalid = TaskClaim(
+        task_id=TASK_ID,
+        owner_agent_id=1,
+        epoch=1,
+        created_at=0.0,
+        freshness_timeout=FRESHNESS_TIMEOUT + 1.0,
+        lease_timeout=LEASE_TIMEOUT + 1.0,
+    )
+
+    with pytest.raises(ValueError, match="lease policy"):
+        transport.deliver_claims((invalid,), 0.0)
+    assert all(not transport.seen_message_ids(agent_id) for agent_id in (1, 2))
+
+    valid = stores[1].create_claim(TASK_ID, 0.0)
+    batch = transport.deliver_claims((valid,), 0.0)
+    assert batch.delivered == 1
 
 
 def test_authoritative_agent_and_task_mutation_cannot_change_local_belief() -> None:

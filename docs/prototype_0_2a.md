@@ -1,5 +1,11 @@
 # Prototype 0.2A technical design
 
+> Historical scope: this document records the world-level communication graph
+> milestone and its original results. Current agent decisions still never receive
+> graph truth, but immutable task/failure evidence can now cross connected
+> multi-hop components and task execution is authorized by receiver-local claims.
+> See [the distributed-state foundation](distributed_state_foundation.md).
+
 ## Scope and acceptance criterion
 
 Prototype 0.2A adds an explicit, time-varying communication topology to the

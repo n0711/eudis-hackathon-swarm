@@ -77,6 +77,15 @@ class SimulationMetrics:
     peer_messages_attempted: int = 0
     peer_messages_delivered: int = 0
     peer_messages_undelivered: int = 0
+    protocol_messages_attempted: int = 0
+    protocol_messages_delivered: int = 0
+    protocol_messages_undelivered: int = 0
+    protocol_messages_forwarded: int = 0
+    protocol_duplicates_suppressed: int = 0
+    protocol_useful_first_deliveries: int = 0
+    protocol_duplicate_source_publications: int = 0
+    protocol_duplicate_route_suppressions: int = 0
+    protocol_inactive_endpoint_deferrals: int = 0
     peer_state_stale_transition_count: int = 0
     peer_state_refresh_transition_count: int = 0
     maximum_simultaneous_stale_peer_observations: int = 0
@@ -109,13 +118,14 @@ class SimulationMetrics:
     def record_failure_detection(
         self, agent_id: int, timestamp: float, last_heartbeat: float
     ) -> None:
+        # The heartbeat value is source-clock metadata.  The observer may
+        # report its difference from deterministic simulator time, but must not
+        # reject protocol evidence merely because a physical clock runs ahead.
         last_heartbeat = validate_timestamp(
             last_heartbeat,
             name="last heartbeat timestamp",
         )
         timestamp = validate_timestamp(timestamp, name="metrics timestamp")
-        if last_heartbeat > timestamp:
-            raise ValueError("last heartbeat timestamp cannot follow detection")
         timestamp = self._observe_time(timestamp)
         record = self.failures.setdefault(agent_id, FailureRecord(agent_id=agent_id))
         if record.detected_at is None:
@@ -285,6 +295,59 @@ class SimulationMetrics:
             simultaneous_stale,
         )
 
+    def record_protocol_message_batch(
+        self,
+        timestamp: float,
+        *,
+        attempted: int,
+        delivered: int,
+        undelivered: int,
+        forwarded: int,
+        duplicates_suppressed: int,
+        useful_first_deliveries: int = 0,
+        duplicate_source_publications: int = 0,
+        duplicate_route_suppressions: int = 0,
+        inactive_endpoint_deferrals: int = 0,
+    ) -> None:
+        """Record transport-only gossip activity without feeding decisions."""
+
+        self._observe_time(timestamp)
+        if (
+            min(
+                attempted,
+                delivered,
+                undelivered,
+                forwarded,
+                duplicates_suppressed,
+                useful_first_deliveries,
+                duplicate_source_publications,
+                duplicate_route_suppressions,
+                inactive_endpoint_deferrals,
+            )
+            < 0
+        ):
+            raise ValueError("protocol message counts must be non-negative")
+        if attempted != delivered + undelivered:
+            raise ValueError("attempted protocol messages must equal outcomes")
+        if forwarded > delivered:
+            raise ValueError("forwarded protocol messages cannot exceed deliveries")
+        if useful_first_deliveries > delivered:
+            raise ValueError("useful deliveries cannot exceed successful deliveries")
+        classified_duplicates = (
+            duplicate_source_publications + duplicate_route_suppressions
+        )
+        if classified_duplicates and classified_duplicates != duplicates_suppressed:
+            raise ValueError("classified duplicate counts must equal their aggregate")
+        self.protocol_messages_attempted += attempted
+        self.protocol_messages_delivered += delivered
+        self.protocol_messages_undelivered += undelivered
+        self.protocol_messages_forwarded += forwarded
+        self.protocol_duplicates_suppressed += duplicates_suppressed
+        self.protocol_useful_first_deliveries += useful_first_deliveries
+        self.protocol_duplicate_source_publications += duplicate_source_publications
+        self.protocol_duplicate_route_suppressions += duplicate_route_suppressions
+        self.protocol_inactive_endpoint_deferrals += inactive_endpoint_deferrals
+
     def finish(self, timestamp: float, mission_completed: bool) -> None:
         timestamp = self._observe_time(timestamp)
         if self._communication_initialized and not self._communication_finalized:
@@ -428,6 +491,19 @@ class SimulationMetrics:
                 f"Peer refresh transitions: {self.peer_state_refresh_transition_count}",
                 "Maximum simultaneous stale observations: "
                 f"{self.maximum_simultaneous_stale_peer_observations}",
+                "",
+                "PROTOCOL GOSSIP",
+                f"Logical forwarding attempts: {self.protocol_messages_attempted}",
+                f"Successful first deliveries: {self.protocol_messages_delivered}",
+                f"Unavailable-link attempts: {self.protocol_messages_undelivered}",
+                f"Useful first deliveries: {self.protocol_useful_first_deliveries}",
+                f"Forwarded first deliveries: {self.protocol_messages_forwarded}",
+                "Duplicate source publications: "
+                f"{self.protocol_duplicate_source_publications}",
+                "Duplicate routes suppressed: "
+                f"{self.protocol_duplicate_route_suppressions}",
+                "Inactive-endpoint deferrals: "
+                f"{self.protocol_inactive_endpoint_deferrals}",
             ]
         )
         mean_degree = self.mean_predicted_peer_degree

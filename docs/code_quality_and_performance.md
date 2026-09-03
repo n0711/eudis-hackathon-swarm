@@ -2,7 +2,10 @@
 
 This document records the focused cleanup and performance work measured at its
 named baseline commit. Later milestones preserve the conclusions while
-tightening peer eligibility from raw freshness to complete `HEARD` status.
+tightening peer eligibility from raw freshness to complete `HEARD` status and
+adding deterministic flooding and receiver-local claim-authorized task control.
+The allocator and direct-delivery measurements below remain historical baseline
+benchmarks, not measurements of the current operational claim loop.
 
 ## Scope and method
 
@@ -68,6 +71,30 @@ for distance, and 0.166 s and 653,687 calls for connectivity. Connectivity's
 largest remaining allocator cost is the 21,006 endpoint-degree calculations and
 352,219 required Euclidean distance checks.
 
+## Protocol-counter correction
+
+An earlier default run reported 15,075 logical protocol attempts and only 474
+successes. That was not evidence of a lossy network: the communication graph
+remained a clique. The entire 14,601 difference was repeated evaluation toward
+failed, inactive UAV 2, and instrumentation classified 97.1% of those
+evaluations as repeats. Collapsing the pending work by `(message ID, inactive
+receiver)` exposed 141 unique obligations.
+
+The transport now excludes inactive endpoints from the link-attempt denominator
+and reports newly observed obligations as `Inactive-endpoint deferrals`.
+`Logical forwarding attempts` therefore means eligible delivery evaluations;
+its outcomes are `Successful first deliveries` or `Unavailable-link attempts`.
+`Useful first deliveries` separately counts domain mutations, while duplicate
+source publications and duplicate-route suppressions explain idempotent work.
+None of these values represents RF packets, bytes, bandwidth, or airtime.
+
+With freshness-threshold renewal pacing and no redundant second claim round when
+nothing completed, the current default reports 178 attempts, all 178 successful
+and useful, zero unavailable or forwarded first deliveries, 1,552 duplicate
+source publications, 428 duplicate-route suppressions, and 53 inactive-endpoint
+deferrals. Zero forwarding is expected in the default clique; chain tests cover
+relay behavior.
+
 ## Memory results
 
 `tracemalloc` recorded peak Python allocations for one run:
@@ -95,6 +122,7 @@ peer observations per candidate UAV.
 | Graph update | `O(N^2 + N + E)` | Same asymptotic cost; fixed pairs and active views cached |
 | Peer delivery batch | `O(S*N)` attempts | Same; lower constant-cost neighbor membership |
 | Agent traversal/completion | sorting plus `O(N)` | cached order and `O(N)` scan |
+| Receiver-local objective ranking | not operational | per idle UAV: `O(M*P + M log M)` for connectivity cost and stable ranking |
 
 ## Rejected changes
 
@@ -112,11 +140,19 @@ peer observations per candidate UAV.
 
 Golden tests preserve Prototype 0.1 recovery, 0.2A topology, 0.2B strict
 freshness/delivery, and the 0.3A UAV 2 -> Task 2 versus UAV 2 -> Task 3 decision
-using only status-qualified `HEARD` observations.
-Distance remains the default. Communication loss still does not imply physical
-failure, and stale peer state still cannot release work.
+using only status-qualified `HEARD` observations. Those allocators are now
+comparison baselines; the normal mission obtains the same policy choice through
+receiver-local utility, claims before binding, and gates every physical action on
+`owns_task()`. Distance remains the default. Communication loss still does not
+imply physical failure, and stale-but-lease-valid ownership still cannot release
+work.
 
 At larger scales, connectivity endpoint-degree calculation is the likely next
-bottleneck, followed by `O(N^2)` graph/link creation and `O(S*N)` directed
-delivery. Any future spatial indexing or alternative matching algorithm must be
-benchmarked and must preserve deterministic tie-breaking and local knowledge.
+bottleneck, followed by `O(N^2)` graph/link creation. One-hop heartbeat batches
+retain the documented `O(S*N)` shape. For `M` pending immutable messages, the
+current small-swarm flooding implementation can inspect `O(M*N^2)` directed
+node/message routes in a dissemination round; per-receiver duplicate suppression
+prevents loop-driven rebroadcast and makes that work finite. Any future spatial
+indexing, alternative matching algorithm, or gossip optimization must be
+benchmarked and must preserve deterministic tie-breaking, origin identity,
+persistent retry, and local knowledge.

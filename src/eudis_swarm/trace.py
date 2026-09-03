@@ -133,6 +133,16 @@ class TraceMetrics:
     messages_delivered: int
     messages_dropped: int
     allocation_policy: str
+    protocol_messages_attempted: int = 0
+    protocol_messages_delivered: int = 0
+    protocol_messages_dropped: int = 0
+    protocol_messages_forwarded: int = 0
+    protocol_duplicates_suppressed: int = 0
+    protocol_unavailable_link_attempts: int = 0
+    protocol_useful_first_deliveries: int = 0
+    protocol_duplicate_source_publications: int = 0
+    protocol_duplicate_route_suppressions: int = 0
+    protocol_inactive_endpoint_deferrals: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -304,6 +314,36 @@ class TraceRecorder:
                 messages_delivered=mission.metrics.peer_messages_delivered,
                 messages_dropped=mission.metrics.peer_messages_undelivered,
                 allocation_policy=mission.metrics.allocation_policy,
+                protocol_messages_attempted=(
+                    mission.metrics.protocol_messages_attempted
+                ),
+                protocol_messages_delivered=(
+                    mission.metrics.protocol_messages_delivered
+                ),
+                protocol_messages_dropped=(
+                    mission.metrics.protocol_messages_undelivered
+                ),
+                protocol_messages_forwarded=(
+                    mission.metrics.protocol_messages_forwarded
+                ),
+                protocol_duplicates_suppressed=(
+                    mission.metrics.protocol_duplicates_suppressed
+                ),
+                protocol_unavailable_link_attempts=(
+                    mission.metrics.protocol_messages_undelivered
+                ),
+                protocol_useful_first_deliveries=(
+                    mission.metrics.protocol_useful_first_deliveries
+                ),
+                protocol_duplicate_source_publications=(
+                    mission.metrics.protocol_duplicate_source_publications
+                ),
+                protocol_duplicate_route_suppressions=(
+                    mission.metrics.protocol_duplicate_route_suppressions
+                ),
+                protocol_inactive_endpoint_deferrals=(
+                    mission.metrics.protocol_inactive_endpoint_deferrals
+                ),
             ),
             events=new_events,
         )
@@ -463,6 +503,7 @@ def _mission_trace_event(
         MissionEventKind.MISSION_STARTED: "MISSION",
         MissionEventKind.MISSION_COMPLETED: "MISSION",
         MissionEventKind.MISSION_TIMED_OUT: "MISSION",
+        MissionEventKind.TASK_CLAIMED: "ALLOCATION",
         MissionEventKind.TASK_ASSIGNED: "ALLOCATION",
         MissionEventKind.TASK_REASSIGNED: "RECOVERY",
         MissionEventKind.TASK_COMPLETED: "TASK",
@@ -472,6 +513,7 @@ def _mission_trace_event(
         MissionEventKind.TASK_DUPLICATED: "DIVERGENCE",
         MissionEventKind.FAILURE_RETRACTED: "RECOVERY",
         MissionEventKind.TASK_YIELDED: "RECOVERY",
+        MissionEventKind.TASK_STOOD_DOWN: "RECOVERY",
         MissionEventKind.TASK_RELEASED: "RECOVERY",
     }
     message = event.kind.value.replace("_", " ").title()

@@ -1,7 +1,7 @@
 """Apply authoritative mission transitions after distributed decisions exist.
 
-The mission owns world-state mutation but never supplies peer truth to a local
-allocator or failure detector.
+The mission owns observer-facing world mutation but never supplies peer truth
+to a local utility scorer, ownership replica, or failure detector.
 """
 
 from __future__ import annotations
@@ -24,6 +24,7 @@ LOGGER = logging.getLogger(__name__)
 
 class MissionEventKind(str, Enum):
     MISSION_STARTED = "MISSION_STARTED"
+    TASK_CLAIMED = "TASK_CLAIMED"
     TASK_ASSIGNED = "TASK_ASSIGNED"
     FAILURE_INJECTED = "FAILURE_INJECTED"
     HEARTBEAT_TIMEOUT = "HEARTBEAT_TIMEOUT"
@@ -34,6 +35,7 @@ class MissionEventKind(str, Enum):
     TASK_COMPLETED = "TASK_COMPLETED"
     TASK_DUPLICATED = "TASK_DUPLICATED"
     TASK_YIELDED = "TASK_YIELDED"
+    TASK_STOOD_DOWN = "TASK_STOOD_DOWN"
     MISSION_COMPLETED = "MISSION_COMPLETED"
     MISSION_TIMED_OUT = "MISSION_TIMED_OUT"
 
@@ -67,6 +69,8 @@ class Mission:
         failure_manager: FailureManager,
         metrics: SimulationMetrics,
         task_claim_stores: Mapping[int, TaskClaimStore] | None = None,
+        *,
+        distributed_task_control: bool = False,
     ) -> None:
         self.agents = {agent.agent_id: agent for agent in agents}
         self.tasks = {task.task_id: task for task in tasks}
@@ -78,6 +82,21 @@ class Mission:
         self.task_claim_stores = (
             None if task_claim_stores is None else dict(task_claim_stores)
         )
+        self.distributed_task_control = distributed_task_control
+        if distributed_task_control and self.task_claim_stores is None:
+            raise ValueError("distributed task control requires claim stores")
+        if self.task_claim_stores is not None:
+            if set(self.task_claim_stores) != set(self.agents):
+                raise ValueError("claim stores must match mission UAV IDs")
+            expected_agent_ids = tuple(sorted(self.agents))
+            expected_task_ids = tuple(sorted(self.tasks))
+            for owner_agent_id, store in self.task_claim_stores.items():
+                if owner_agent_id != store.owner_agent_id:
+                    raise ValueError("claim-store key must match its owner")
+                if store.agent_ids != expected_agent_ids:
+                    raise ValueError("claim stores must match mission UAV IDs")
+                if store.task_ids != expected_task_ids:
+                    raise ValueError("claim stores must match mission task IDs")
         # agent membership is immutable, so one traversal order can be reused.
         self._ordered_agents = tuple(
             sorted(self.agents.values(), key=lambda item: item.agent_id)
@@ -149,7 +168,8 @@ class Mission:
         )
         self._event(MissionEventKind.MISSION_STARTED, timestamp)
         heartbeats = self.exchange_heartbeats(timestamp)
-        self.allocate_tasks(timestamp)
+        if not self.distributed_task_control:
+            self.allocate_tasks(timestamp)
         self.assert_consistent()
         return heartbeats
 
@@ -232,8 +252,14 @@ class Mission:
             )
 
     def allocate_tasks(self, timestamp: float) -> list[Allocation]:
+        """Apply the legacy centralized baseline outside distributed-control runs."""
+
         self._require_running()
         timestamp = self._observe_time(timestamp)
+        if self.distributed_task_control:
+            raise RuntimeError(
+                "centralized allocation is disabled under distributed task control"
+            )
         proposed = self.allocator.allocate(self.agents.values(), self.tasks.values())
         allocations: list[Allocation] = []
         for allocation in proposed:
@@ -256,11 +282,157 @@ class Mission:
             allocations.append(allocation)
         return allocations
 
+    def record_task_claim(self, agent_id: int, task_id: int, timestamp: float) -> None:
+        """Record a locally created intent without making it executable."""
+
+        self._require_running()
+        timestamp = self._observe_time(timestamp)
+        if not self.distributed_task_control:
+            raise RuntimeError("task-claim events require distributed task control")
+        self._event(
+            MissionEventKind.TASK_CLAIMED,
+            timestamp,
+            agent_id=agent_id,
+            task_id=task_id,
+        )
+
+    def activate_claimed_task(
+        self, agent_id: int, task_id: int, timestamp: float
+    ) -> bool:
+        """Bind a local execution intent only after the local claim is authoritative.
+
+        ``Task.assigned_agent`` is maintained only as an observer-facing world
+        projection.  It is deliberately not consulted for authorization because
+        one mutable field cannot represent partition-local split ownership.
+        """
+
+        self._require_running()
+        timestamp = self._observe_time(timestamp)
+        if not self.distributed_task_control or self.task_claim_stores is None:
+            raise RuntimeError("claim activation requires distributed task control")
+        agent = self.agents[agent_id]
+        if not agent.responsive or agent.current_task is not None:
+            return False
+        if not self.task_claim_stores[agent_id].owns_task(task_id, timestamp):
+            return False
+
+        if agent.wrongly_declared:
+            # The coordinator-visible FAILED label is not available to this live,
+            # isolated process.  Preserve that observer belief while binding its
+            # locally authorized intent.
+            agent.current_task = task_id
+        else:
+            agent.assign_task(task_id)
+
+        task = self.tasks[task_id]
+        if task.status is TaskStatus.UNASSIGNED:
+            task.assign(agent_id)
+
+        recovery = self.metrics.recoveries.get(task_id)
+        if recovery is not None and recovery.reassigned_agent_id is None:
+            self.metrics.record_reassignment(task_id, agent_id, timestamp)
+            kind = MissionEventKind.TASK_REASSIGNED
+        else:
+            kind = MissionEventKind.TASK_ASSIGNED
+        self._event(kind, timestamp, agent_id=agent_id, task_id=task_id)
+        LOGGER.info(
+            "[CLAIM] UAV %d may execute Task %d after local ownership resolution",
+            agent_id,
+            task_id,
+        )
+        return True
+
+    def task_is_executable(self, agent_id: int, task_id: int, timestamp: float) -> bool:
+        """Return the single authorization predicate used by physical behavior."""
+
+        timestamp = validate_timestamp(
+            timestamp,
+            previous=0.0 if self._last_timestamp is None else self._last_timestamp,
+            name="execution authorization timestamp",
+        )
+        agent = self.agents[agent_id]
+        if not agent.responsive or agent.current_task != task_id:
+            return False
+        if not self.distributed_task_control:
+            return agent.status is AgentStatus.ACTIVE or agent.wrongly_declared
+        if self.task_claim_stores is None:
+            raise RuntimeError("distributed task control has no claim stores")
+        return self.task_claim_stores[agent_id].owns_task(task_id, timestamp)
+
+    def stand_down_unowned_task(
+        self,
+        agent_id: int,
+        task_id: int,
+        timestamp: float,
+        *,
+        contested: bool = False,
+    ) -> bool:
+        """Clear an execution intent after local ownership ceases to authorize it."""
+
+        self._require_running()
+        timestamp = self._observe_time(timestamp)
+        if not self.distributed_task_control or self.task_claim_stores is None:
+            raise RuntimeError("claim stand-down requires distributed task control")
+        agent = self.agents[agent_id]
+        if agent.current_task != task_id:
+            return False
+        if self.task_claim_stores[agent_id].owns_task(task_id, timestamp):
+            raise ValueError("an actionable local owner must not stand down")
+
+        agent.release_task(task_id)
+        task = self.tasks[task_id]
+        if task.status is TaskStatus.ASSIGNED and task.assigned_agent == agent_id:
+            task.release()
+        if contested:
+            self.metrics.contested_task_yield_count += 1
+        self._event(
+            MissionEventKind.TASK_YIELDED
+            if contested
+            else MissionEventKind.TASK_STOOD_DOWN,
+            timestamp,
+            agent_id=agent_id,
+            task_id=task_id,
+        )
+        LOGGER.info(
+            "[RECONCILE] UAV %d stopped Task %d: local claim is not actionable",
+            agent_id,
+            task_id,
+        )
+        return True
+
+    def release_owned_task(self, agent_id: int, task_id: int, timestamp: float) -> bool:
+        """Voluntarily release locally owned work and publish its tombstone."""
+
+        self._require_running()
+        timestamp = self._observe_time(timestamp)
+        if not self.distributed_task_control or self.task_claim_stores is None:
+            raise RuntimeError("distributed release requires claim stores")
+        agent = self.agents[agent_id]
+        if agent.current_task != task_id:
+            return False
+        store = self.task_claim_stores[agent_id]
+        if not store.owns_task(task_id, timestamp):
+            raise ValueError("only the locally actionable owner may release a task")
+        store.release_claim(task_id, timestamp)
+        agent.release_task(task_id)
+        task = self.tasks[task_id]
+        if task.status is TaskStatus.ASSIGNED and task.assigned_agent == agent_id:
+            task.release()
+        self._event(
+            MissionEventKind.TASK_RELEASED,
+            timestamp,
+            agent_id=agent_id,
+            task_id=task_id,
+        )
+        return True
+
     def _declare_and_release(
         self, declaration: FailureDeclaration, timestamp: float
     ) -> None:
         agent = self.agents[declaration.agent_id]
-        task_id = agent.current_task
+        task_id = (
+            declaration.task_id if self.distributed_task_control else agent.current_task
+        )
         self.metrics.record_failure_detection(
             agent.agent_id, timestamp, declaration.last_heartbeat
         )
@@ -291,30 +463,34 @@ class Mission:
             declaration.required_votes,
         )
 
-        # task mutation is a world-state consequence, not failure evidence.
+        # In distributed mode a declaration never revokes another process's
+        # claim.  A real fail-stop owner simply stops renewing; peer replicas can
+        # acquire the task only after their own received copy of its lease expires.
         if task_id is None:
             return
         task = self.tasks[task_id]
         if task.status is TaskStatus.COMPLETED:
             return
-        if (
-            task.status is not TaskStatus.ASSIGNED
-            or task.assigned_agent != agent.agent_id
-        ):
-            raise RuntimeError("failed UAV/task ownership is inconsistent")
-        task.release()
+        if task.status is TaskStatus.ASSIGNED and task.assigned_agent == agent.agent_id:
+            task.release()
         if agent.wrongly_declared:
-            # the UAV is unreachable, not dead.  It never hears the declaration,
-            # so it keeps the task while the coordinator hands the same work to
-            # somebody else.  Two owners now exist until the partition heals.
+            # This live UAV never received the remote declaration and therefore
+            # keeps following its own claim state.
             self.metrics.belief_divergence_event_count += 1
             LOGGER.info(
                 "[DIVERGENCE] UAV %d still owns Task %d it was declared dead holding",
                 agent.agent_id,
                 task.task_id,
             )
-        else:
-            agent.release_task(task.task_id)
+        elif agent.current_task is not None:
+            failed_task_id = agent.current_task
+            agent.release_task(failed_task_id)
+            failed_task = self.tasks[failed_task_id]
+            if (
+                failed_task.status is TaskStatus.ASSIGNED
+                and failed_task.assigned_agent == agent.agent_id
+            ):
+                failed_task.release()
         self.metrics.record_orphan(task.task_id, agent.agent_id, timestamp)
         self._event(
             MissionEventKind.TASK_RELEASED,
@@ -344,15 +520,14 @@ class Mission:
                 raise ValueError(
                     "failure declaration was not produced by the configured protocol"
                 )
-            if declaration.detected_at > timestamp:
-                raise ValueError("failure declaration cannot follow recovery time")
             # protocol certificates may retry, but world mutation happens once.
             if self.agents[declaration.agent_id].status is AgentStatus.FAILED:
                 continue
             self._declare_and_release(declaration, timestamp)
             applied.append(declaration)
-        if applied:
+        if applied and not self.distributed_task_control:
             self.allocate_tasks(timestamp)
+        if applied:
             self.assert_consistent()
         return applied
 
@@ -360,6 +535,14 @@ class Mission:
         self, agent_id: int, task_id: int, timestamp: float
     ) -> bool:
         """Give up work this UAV lost in distributed reconciliation."""
+
+        if self.distributed_task_control:
+            return self.stand_down_unowned_task(
+                agent_id,
+                task_id,
+                timestamp,
+                contested=True,
+            )
 
         self._require_running()
         timestamp = self._observe_time(timestamp)
@@ -377,11 +560,6 @@ class Mission:
             agent_id=agent_id,
             task_id=task_id,
         )
-        LOGGER.info(
-            "[RECONCILE] UAV %d yielded Task %d after losing the contest",
-            agent_id,
-            task_id,
-        )
         return True
 
     def retract_declaration(self, agent_id: int, timestamp: float) -> bool:
@@ -392,11 +570,10 @@ class Mission:
         agent = self.agents[agent_id]
         if not agent.wrongly_declared:
             return False
-        # while it was believed dead the coordinator may have given its work to
-        # somebody else.  Rejoining with a pointer to a task it no longer owns
-        # would break bidirectional ownership, so surrender it here and drop the
-        # matching claim so the ownership layer converges too.
-        if agent.current_task is not None:
+        # In the distributed path no observer-facing Task pointer can force a
+        # surrender.  Delivered claim evidence and local reconciliation already
+        # decide whether this UAV keeps or yields the work.
+        if not self.distributed_task_control and agent.current_task is not None:
             stale_task_id = agent.current_task
             if self.tasks[stale_task_id].assigned_agent != agent_id:
                 agent.release_task(stale_task_id)
@@ -434,6 +611,54 @@ class Mission:
         timestamp = self._observe_time(timestamp)
         agent = self.agents[agent_id]
         task = self.tasks[task_id]
+        if self.distributed_task_control:
+            if self.task_claim_stores is None:
+                raise RuntimeError("distributed task control has no claim stores")
+            store = self.task_claim_stores[agent_id]
+            if not self.task_is_executable(agent_id, task_id, timestamp):
+                raise RuntimeError(
+                    f"UAV {agent_id} cannot complete Task {task_id} without "
+                    "an actionable local claim"
+                )
+
+            # Terminal evidence is durable before observer-facing world mutation.
+            store.create_completion(task_id, timestamp)
+            agent.complete_task(task_id)
+            if task.status is TaskStatus.COMPLETED:
+                self.metrics.duplicated_task_completion_count += 1
+                self._event(
+                    MissionEventKind.TASK_DUPLICATED,
+                    timestamp,
+                    agent_id=agent_id,
+                    task_id=task_id,
+                    position=agent.position,
+                )
+                LOGGER.info(
+                    "[DUPLICATE] UAV %d finished already-completed Task %d",
+                    agent_id,
+                    task_id,
+                )
+                return
+
+            # The mutable Task owner is an observer projection, not authority.
+            # Let the first locally authorized physical completion replace a
+            # stale projection left by a partition-local executor.
+            if task.status is TaskStatus.ASSIGNED and task.assigned_agent != agent_id:
+                task.release()
+            if task.status is TaskStatus.UNASSIGNED:
+                task.assign(agent_id)
+            task.complete(agent_id)
+            self.metrics.record_task_completion(task_id, timestamp)
+            self._event(
+                MissionEventKind.TASK_COMPLETED,
+                timestamp,
+                agent_id=agent_id,
+                task_id=task_id,
+                position=agent.position,
+            )
+            LOGGER.info("[TASK] UAV %d completed Task %d", agent_id, task_id)
+            return
+
         if agent.wrongly_declared:
             # the coordinator believes this UAV is dead and cannot hear it, so
             # the effort is real but invisible: duplicated, not completed.
@@ -487,7 +712,11 @@ class Mission:
             LOGGER.error("[MISSION] Mission timed out at t=%.2fs", timestamp)
 
     def assert_consistent(self) -> None:
-        """Fail fast if bidirectional task ownership becomes inconsistent."""
+        """Fail fast if mission state violates its selected ownership model."""
+
+        if self.distributed_task_control:
+            self._assert_distributed_consistent()
+            return
 
         active_task_ids: set[int] = set()
         for agent in self.agents.values():
@@ -523,3 +752,31 @@ class Mission:
                     continue
                 if owner.current_task != task.task_id:
                     raise RuntimeError("task/agent ownership links do not match")
+
+    def _assert_distributed_consistent(self) -> None:
+        """Check local execution authority without demanding global agreement."""
+
+        if self.task_claim_stores is None:
+            raise RuntimeError("distributed task control has no claim stores")
+        timestamp = 0.0 if self._last_timestamp is None else self._last_timestamp
+        for agent in self.agents.values():
+            if agent.current_task is None:
+                if agent.status is AgentStatus.ACTIVE:
+                    raise RuntimeError("an active UAV has no execution intent")
+                continue
+            if agent.current_task not in self.tasks:
+                raise RuntimeError("an execution intent names an unknown task")
+            # An unresponsive process has no advancing local clock and cannot
+            # execute.  Its pointer may remain until a declaration is applied.
+            if agent.responsive and not self.task_claim_stores[
+                agent.agent_id
+            ].owns_task(agent.current_task, timestamp):
+                raise RuntimeError(
+                    "a responsive UAV has an execution intent without local ownership"
+                )
+
+        for task in self.tasks.values():
+            if task.status is TaskStatus.UNASSIGNED and task.assigned_agent is not None:
+                raise RuntimeError("an unassigned task has an observer owner")
+            if task.status is TaskStatus.ASSIGNED and task.assigned_agent is None:
+                raise RuntimeError("an assigned task has no observer owner")

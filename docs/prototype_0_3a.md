@@ -1,8 +1,11 @@
 # Prototype 0.3A: connectivity-aware task allocation
 
-This document explains the centralized reference allocator introduced in
-Prototype 0.3A. The current distributed-state foundation further requires a
-peer's complete local status to be `HEARD` before its snapshot affects scoring.
+> Historical scope: this document explains the centralized comparison policy
+> introduced in Prototype 0.3A. The normal mission now uses receiver-local
+> utility, task claims, and `owns_task()` execution authority. The
+> `TaskAllocator` classes remain baselines; `--allocation-policy` maps their
+> distance/connectivity choices into the operational local-utility path described
+> below. See [the distributed-state foundation](distributed_state_foundation.md).
 
 ## Objective
 
@@ -21,7 +24,8 @@ endpoint that its own current knowledge predicts would isolate it?
 
 ## Policy selection
 
-`allocation_policy` and `--allocation-policy` accept:
+In the original 0.3A implementation, `allocation_policy` and
+`--allocation-policy` selected:
 
 - `distance` (default): the unchanged Prototype 0.1 globally greedy
   nearest-pair allocator;
@@ -30,10 +34,9 @@ endpoint that its own current knowledge predicts would isolate it?
 Keeping `distance` as the default preserves every established Prototype
 0.1/0.2 deterministic regression.
 
-Both allocators implement one minimal proposal interface. They return immutable
-`Allocation` values and never mutate `Agent.current_task` or
-`Task.assigned_agent`. `Mission` remains the only owner of cross-entity
-assignment transitions.
+Both baseline allocators implement one minimal proposal interface. They return
+immutable `Allocation` values and mutate neither agents nor tasks. Normal
+distributed-control runs do not call that interface.
 
 ## Distance baseline
 
@@ -59,7 +62,8 @@ For each peer `k`:
 
 Raw freshness remains separately observable as `UNKNOWN`, `FRESH`, or `STALE`.
 `FRESH` is necessary but no longer sufficient for connectivity scoring because
-a blocked link or protocol declaration is stronger local evidence.
+elapsed receiver-local silence or a protocol declaration is stronger local
+evidence. The graph's blocked-link truth is never copied into this store.
 
 The predicted degree is:
 
@@ -87,6 +91,21 @@ The minimum score wins. This lexicographically avoids predicted isolation,
 maximizes predicted reliable direct links, minimizes travel, and finally uses
 stable ID tie-breaking. No arbitrary weighting constant is introduced.
 
+## Current operational mapping
+
+The normal mission now treats those policy names as local utility modes:
+
+- `distance` uses `TaskUtilityWeights(distance=1)` and zero resource,
+  communication, and role costs;
+- `connectivity` adds a communication cost equal to configured peer count minus
+  predicted heard degree. Its weight is twice the mission-area diagonal, so one
+  locally predicted degree step dominates any in-area travel difference.
+
+Each responsive idle UAV ranks the frozen `TaskObjective` catalogue
+independently, creates a claim before work is bound, and executes only after its
+own store resolves that claim to `OWNED_BY_SELF`. The historical global greedy
+score remains useful as a comparator, but it is not the operational authority.
+
 ## Knowledge boundary
 
 The candidate UAV's current position comes from its own `Agent`, because that is
@@ -106,15 +125,14 @@ This also means a stale or never-delivered peer supplies no connectivity
 evidence. `STALE` and `UNKNOWN` do not imply physical failure: the UAV remains
 eligible if its authoritative physical state is otherwise idle and healthy.
 
-## Initial UNKNOWN fallback
+## Initial knowledge
 
-`Mission.start()` intentionally retains its existing ordering: initial task
-allocation occurs before the first graph-mediated delivery. Peer stores are
-therefore initially `UNKNOWN`.
-
-When no candidate has useful heard peer information, every predicted degree is
-zero. The leading score terms tie, so distance and IDs reproduce the baseline
-ordering naturally. There is no authoritative-peer lookup or scheduler hack.
+In historical 0.3A, initial allocation preceded heartbeat delivery, so every
+peer store began `UNKNOWN`. Normal distributed control now skips centralized
+startup allocation, delivers the initial heartbeat snapshots through the graph,
+and then runs its first local claim round. If a receiver still has no useful
+`HEARD` copies, every predicted degree is zero and its local ordering falls back
+to travel distance and task ID. There is no graph or live-peer lookup.
 
 ## Deterministic comparison
 
@@ -158,9 +176,11 @@ optimal.
 
 ## Reporting and metrics
 
-Every applied allocation record retains its logical timestamp, selected agent
-and task IDs, travel distance, policy, predicted heard-peer degree, and predicted
-isolation flag where applicable.
+Every activated local owner produces a compatible observer `Allocation` record
+containing its logical timestamp, selected agent and task IDs, travel distance,
+policy, predicted heard-peer degree, and predicted-isolation flag where
+applicable. That record describes a decision already made from local utility; it
+does not authorize work.
 
 The `ALLOCATION (PROTOTYPE 0.3A)` summary reports:
 
@@ -170,8 +190,10 @@ The `ALLOCATION (PROTOTYPE 0.3A)` summary reports:
 - mean predicted peer degree; and
 - minimum predicted peer degree.
 
-INFO logs use `[ALLOC-COMM]` for selected connectivity decisions. Rejected
-candidates are not logged at INFO level.
+The historical centralized baseline logs selected connectivity decisions with
+`[ALLOC-COMM]`. Normal distributed task activation instead logs `[CLAIM]` after
+local ownership is established. Rejected candidates are not logged at INFO
+level.
 
 ## Validation
 
@@ -187,8 +209,11 @@ Prediction is a geometric one-hop endpoint estimate, not RF, RSSI, SINR, or a
 propagation model. It assumes peer positions remain at their last delivered
 locations and does not jointly predict simultaneous assignments or motion.
 
-Prototype 0.3A adds no task preemption, stealing, relay role, topology-repair
-movement, communication-aware path planning, multi-hop routing, forwarding,
-queues, general reliable heartbeat retransmission, latency, distributed auction,
-consensus, leader election, ROS 2, MAVLink, autopilot integration, SITL, QUBO,
-QAOA, or quantum simulation. Those remain separately scoped future work.
+Within its historical scope, Prototype 0.3A added no task preemption, stealing,
+relay role, topology-repair movement, communication-aware path planning,
+multi-hop forwarding, queues, general reliable heartbeat retransmission,
+latency, distributed auction, consensus, leader election, ROS 2, MAVLink,
+autopilot integration, SITL, QUBO, QAOA, or quantum simulation. Later milestones
+add deterministic immutable-evidence flooding and authoritative receiver-local
+task control, but not dynamic task discovery, resource/role models, route
+planning, relay movement, or the other capabilities in that list.

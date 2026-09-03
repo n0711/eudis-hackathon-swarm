@@ -27,7 +27,7 @@ def _mission_signature(
     ]
 
 
-def test_jamming_is_misread_as_failure_without_ownership_reconciliation() -> None:
+def test_jamming_is_misread_as_failure_but_claims_control_execution() -> None:
     """A jammed-but-healthy UAV is wrongly declared dead by a peer quorum.
 
     This is the honest consequence of removing the link oracle.  Nothing local
@@ -51,27 +51,23 @@ def test_jamming_is_misread_as_failure_without_ownership_reconciliation() -> Non
 
     assert metrics.mission_completed is True
     assert metrics.completed_task_count == 20
-    assert metrics.simulation_duration == pytest.approx(10.75)
+    assert metrics.simulation_duration == pytest.approx(12.0)
     # UAV 2 was never physically harmed: no failure was ever injected into it.
     assert agent.failure_injected_at is None
 
-    # ...yet the swarm declared it dead and took its work away, before
-    # first-hand contact on reconnection overturned the verdict.
+    # ...yet peers declared it dead before first-hand contact overturned the
+    # verdict. The declaration cannot centrally revoke this UAV's local claim.
     assert metrics.declaration_retraction_count == 1
     assert metrics.failed_agent_count == 0
-    assert metrics.orphaned_task_count == 1
-    assert metrics.reassigned_task_count == 1
+    assert metrics.orphaned_task_count == 0
+    assert metrics.reassigned_task_count == 0
     assert result.mission.tasks[19].status is TaskStatus.COMPLETED
     assert result.mission.tasks[19].assigned_agent == 2
 
-    # the full physical-recovery path runs on a UAV that never physically failed.
-    physical_recovery_kinds = {
-        MissionEventKind.FAILURE_DECLARED,
-        MissionEventKind.TASK_RELEASED,
-        MissionEventKind.TASK_REASSIGNED,
-    }
-    fired = {event.kind for event in result.mission.events} & physical_recovery_kinds
-    assert fired == physical_recovery_kinds
+    # Failure belief is recorded, but there is no coordinator-driven takeover.
+    fired = {event.kind for event in result.mission.events}
+    assert MissionEventKind.FAILURE_DECLARED in fired
+    assert MissionEventKind.TASK_REASSIGNED not in fired
 
     # UAV 2 finishes the work it could reach before the quorum stopped it.
     agent_completions = [
@@ -79,9 +75,14 @@ def test_jamming_is_misread_as_failure_without_ownership_reconciliation() -> Non
         for event in result.mission.events
         if event.kind is MissionEventKind.TASK_COMPLETED and event.agent_id == 2
     ]
-    # Tasks 19 and 15 finish during the outage; Task 20 is duplicated while
-    # UAV 2 is believed dead, then it rejoins and completes Task 20 for real.
-    assert agent_completions == [(19, 4.0), (15, 4.75), (20, 10.5)]
+    # Receiver-local ownership lets the isolated UAV keep selecting work. Its
+    # completion evidence is retained and reconciled when the link returns.
+    assert agent_completions == [
+        (19, 4.0),
+        (15, 4.75),
+        (20, 7.5),
+        (2, 12.0),
+    ]
 
     positions_during_outage = {
         position
@@ -274,12 +275,12 @@ def test_isolated_uav_keeps_a_long_running_task_through_the_outage() -> None:
 
     task_events = [event for event in result.mission.events if event.task_id == 2]
     assert [event.kind for event in task_events] == [
+        MissionEventKind.TASK_CLAIMED,
         MissionEventKind.TASK_ASSIGNED,
         MissionEventKind.TASK_COMPLETED,
     ]
-    assert task_events[0].agent_id == task_events[1].agent_id == 2
-    assert task_events[0].timestamp == 0.0
-    assert task_events[1].timestamp == 5.0
+    assert all(event.agent_id == 2 for event in task_events)
+    assert [event.timestamp for event in task_events] == [0.0, 0.0, 5.0]
     assert result.mission.tasks[2].assigned_agent == 2
     assert result.mission.agents[2].responsive is True
     assert result.mission.agents[2].status is AgentStatus.IDLE
@@ -377,14 +378,14 @@ def test_communication_cli_arguments_are_wired(monkeypatch: pytest.MonkeyPatch) 
     assert captured["config"].allocation_policy == "connectivity"
 
 
-def test_a_wrongly_declared_uav_keeps_flying_and_duplicates_the_work() -> None:
-    """A declaration is belief, and belief does not reach the vehicle.
+def test_a_wrongly_declared_uav_keeps_locally_authorized_work() -> None:
+    """A declaration is belief and cannot revoke receiver-local authority.
 
-    UAV 2 is jammed from t=4 to t=8 and never physically harmed.  Its peers
-    reach quorum and declare it dead, so the coordinator hands its task to
-    somebody else.  UAV 2 hears none of this: it keeps flying, keeps
-    transmitting, and finishes the task anyway.  Two UAVs do the same work and
-    the swarm pays for it twice.
+    UAV 2 is jammed from t=4 to t=8 and never physically harmed. Its peers
+    reach quorum and declare it dead, but no coordinator reassigns its work.
+    UAV 2 continues only while its own claim store authorizes execution; after
+    reconnection, completion evidence and local reconciliation prevent duplicate
+    work.
     """
 
     result = Simulation(
@@ -416,21 +417,22 @@ def test_a_wrongly_declared_uav_keeps_flying_and_duplicates_the_work() -> None:
     assert metrics.failed_agent_count == 0
     assert agent.wrongly_declared is False
 
-    # the coordinator reassigned work UAV 2 never let go of.
-    assert metrics.belief_divergence_event_count == 1
-    assert metrics.orphaned_task_count == 1
-    assert metrics.reassigned_task_count == 1
+    # The stale declaration names already-completed Task 19, so it cannot
+    # revoke the newer receiver-local intents UAV 2 created while isolated.
+    assert metrics.belief_divergence_event_count == 0
+    assert metrics.orphaned_task_count == 0
+    assert metrics.reassigned_task_count == 0
 
-    # UAV 2's effort is real but invisible: nobody could hear it report.
-    assert metrics.duplicated_task_completion_count == 1
-    duplicated = [
+    # Completion evidence, rather than coordinator belief, is authoritative.
+    assert metrics.duplicated_task_completion_count == 0
+    stood_down = [
         event
         for event in result.mission.events
-        if event.kind is MissionEventKind.TASK_DUPLICATED
+        if event.kind is MissionEventKind.TASK_STOOD_DOWN
     ]
-    assert [event.agent_id for event in duplicated] == [2]
+    assert {event.agent_id for event in stood_down} == {2, 3}
 
-    # the mission still finishes, having done twenty tasks' work plus one.
+    # The mission still finishes with each of the twenty tasks completed once.
     assert metrics.mission_completed is True
     assert metrics.completed_task_count == 20
 
@@ -454,15 +456,12 @@ def test_a_physically_dead_uav_stops_and_releases_its_work() -> None:
     assert metrics.completed_task_count == 20
 
 
-def test_a_rejoining_uav_surrenders_work_reassigned_while_it_was_believed_dead() -> (
-    None
-):
+def test_a_rejoining_uav_keeps_work_when_its_local_claim_still_wins() -> None:
     """Rejoining must not resurrect a claim on work somebody else now owns.
 
-    Here UAV 2 flies too slowly to reach its task before the link returns, so
-    unlike the faster scenario above it is still holding the task pointer when
-    the declaration is withdrawn. That pointer names work the coordinator has
-    since given to a peer, and keeping it would break bidirectional ownership.
+    Here UAV 2 flies too slowly to reach its task before the link returns. A
+    mutable world-task pointer must not force surrender: delivered claims and
+    deterministic local reconciliation decide whether it keeps executing.
     """
 
     result = Simulation(
@@ -480,7 +479,8 @@ def test_a_rejoining_uav_surrenders_work_reassigned_while_it_was_believed_dead()
     agent = result.mission.agents[2]
 
     assert metrics.declaration_retraction_count == 1
-    assert metrics.rejoin_surrendered_task_count == 1
+    assert metrics.rejoin_surrendered_task_count == 0
+    assert metrics.reassigned_task_count == 0
 
     # the reinstated UAV holds nothing it does not own, and the mission finishes.
     assert agent.wrongly_declared is False

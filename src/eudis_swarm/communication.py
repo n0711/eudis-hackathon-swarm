@@ -13,7 +13,7 @@ from numbers import Real
 from typing import Iterable, Mapping
 
 from .agent import Position
-from .validation import validate_positive_real
+from .validation import validate_nonnegative_real, validate_positive_real
 
 
 @dataclass(frozen=True, slots=True)
@@ -150,6 +150,54 @@ class RadioModel:
         if ber >= 1.0:
             return 0.0
         return max(0.0, min(1.0, (1.0 - ber) ** self.frame_bits))
+
+
+@dataclass(frozen=True, slots=True)
+class RegionJammer:
+    """A circular jamming region active over a fixed logical-time window.
+
+    While ``start_time <= t < end_time`` any link whose Euclidean midpoint lies
+    within ``radius`` of ``(center_x, center_y)`` is unavailable.  The midpoint
+    rule is a deliberate abstraction: it severs links that would cross the
+    disc without modelling propagation through it.
+    """
+
+    center_x: float
+    center_y: float
+    radius: float
+    start_time: float
+    end_time: float
+
+    def __post_init__(self) -> None:
+        for name, value in (
+            ("center_x", self.center_x),
+            ("center_y", self.center_y),
+        ):
+            if (
+                not isinstance(value, Real)
+                or isinstance(value, bool)
+                or not isfinite(value)
+            ):
+                raise ValueError(f"RegionJammer {name} must be a finite coordinate")
+        validate_positive_real(self.radius, name="RegionJammer radius")
+        validate_nonnegative_real(self.start_time, name="RegionJammer start_time")
+        validate_nonnegative_real(self.end_time, name="RegionJammer end_time")
+        if self.end_time <= self.start_time:
+            raise ValueError("RegionJammer end_time must be greater than start_time")
+
+    def active_at(self, timestamp: float) -> bool:
+        """Return whether the jammer is radiating at the given logical time."""
+
+        return self.start_time <= timestamp < self.end_time
+
+    def blocks_link(self, left: Position, right: Position) -> bool:
+        """Return whether the region severs a link between two points."""
+
+        midpoint_x = (left[0] + right[0]) / 2.0
+        midpoint_y = (left[1] + right[1]) / 2.0
+        return (
+            hypot(midpoint_x - self.center_x, midpoint_y - self.center_y) <= self.radius
+        )
 
 
 class CommunicationState(str, Enum):
@@ -321,6 +369,12 @@ class CommunicationGraph:
         """Return explicitly blocked links in canonical endpoint order."""
 
         return self._blocked_links
+
+    @property
+    def pair_keys(self) -> tuple[tuple[int, int], ...]:
+        """Return every canonical undirected UAV pair in fixed order."""
+
+        return self._pair_keys
 
     @property
     def initialized(self) -> bool:
@@ -596,4 +650,5 @@ __all__ = [
     "CommunicationState",
     "CommunicationUpdate",
     "RadioModel",
+    "RegionJammer",
 ]

@@ -3,8 +3,6 @@ These scenarios prove partitions and recovery without authoritative peer state."
 
 from __future__ import annotations
 
-import pytest
-
 from eudis_swarm.agent import Agent, AgentStatus, Heartbeat
 from eudis_swarm.communication import CommunicationGraph
 from eudis_swarm.failure_manager import (
@@ -271,8 +269,11 @@ def test_graph_delivered_failure_votes_form_a_quorum() -> None:
         3.0,
         receiving_agent_ids=survivors,
     )
-    assert vote_delivery.attempted == vote_delivery.delivered == 6
-    assert vote_delivery.undelivered == 0
+    assert vote_delivery.delivered == 6
+    assert vote_delivery.attempted == (
+        vote_delivery.delivered + vote_delivery.undelivered
+    )
+    assert vote_delivery.duplicates_suppressed > 0
 
     declarations = failure_manager.detect_declarations(
         3.0,
@@ -294,8 +295,11 @@ def test_graph_delivered_failure_votes_form_a_quorum() -> None:
         3.0,
         receiving_agent_ids=survivors,
     )
-    assert declaration_delivery.attempted == declaration_delivery.delivered == 6
-    assert declaration_delivery.undelivered == 0
+    assert declaration_delivery.delivered == 6
+    assert declaration_delivery.attempted == (
+        declaration_delivery.delivered + declaration_delivery.undelivered
+    )
+    assert declaration_delivery.duplicates_suppressed > 0
     assert failure_manager.declared_agent_ids == frozenset({4})
     for survivor_agent_id in survivors:
         assert stores[survivor_agent_id].status_for(4) is PeerStatus.DECLARED_FAILED
@@ -381,7 +385,7 @@ def test_declaration_certificates_retry_after_partition_reconnects() -> None:
     assert stores[4].status_for(5) is PeerStatus.DECLARED_FAILED
 
 
-def test_protocol_transport_rejects_messages_from_the_future() -> None:
+def test_protocol_transport_treats_source_times_as_clock_skewed_metadata() -> None:
     agent_ids = (1, 2, 3)
     positions = {agent_id: (0.0, 0.0) for agent_id in agent_ids}
     graph = CommunicationGraph(agent_ids, communication_range=1.0)
@@ -398,12 +402,13 @@ def test_protocol_transport_rejects_messages_from_the_future() -> None:
         last_heard_at=0.0,
         task_id=None,
     )
-    with pytest.raises(ValueError, match="vote.*follow delivery"):
-        transport.deliver_failure_votes(
-            (future_vote,),
-            failure_manager,
-            0.5,
-        )
+    vote_batch = transport.deliver_failure_votes(
+        (future_vote,),
+        failure_manager,
+        0.5,
+    )
+    assert vote_batch.delivered == 2
+    assert all(receipt.origin_agent_id == 1 for receipt in vote_batch.receipts)
 
     future_declaration = FailureDeclaration(
         agent_id=3,
@@ -414,8 +419,13 @@ def test_protocol_transport_rejects_messages_from_the_future() -> None:
         voter_agent_ids=(1, 2),
         required_votes=2,
     )
-    with pytest.raises(ValueError, match="declaration.*follow delivery"):
-        transport.deliver_failure_declarations((future_declaration,), 0.5)
+    declaration_batch = transport.deliver_failure_declarations(
+        (future_declaration,), 0.5
+    )
+    assert declaration_batch.delivered == 2
+    assert all(
+        receipt.message_id.emitted_at == 1.0 for receipt in declaration_batch.receipts
+    )
 
 
 def test_quorum_without_the_local_declarer_is_ignored_safely() -> None:

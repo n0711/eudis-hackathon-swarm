@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from .communication import RadioModel
+from .communication import RadioModel, RegionJammer
 from .validation import (
     validate_nonnegative_real,
     validate_positive_integer,
@@ -36,6 +36,8 @@ class SimulationConfig:
     link_model: str = "range"
     stochastic_delivery: bool = False
     radio_model: RadioModel = field(default_factory=RadioModel)
+    blocked_links: frozenset[tuple[int, int]] = frozenset()
+    region_jammer: RegionJammer | None = None
     comm_fault_agent_id: int | None = None
     comm_fault_start: float = 4.0
     comm_fault_end: float = 8.0
@@ -60,6 +62,45 @@ class SimulationConfig:
             raise ValueError("radio_model must be a RadioModel instance")
         if self.stochastic_delivery and self.link_model != "radio":
             raise ValueError("stochastic_delivery requires link_model='radio'")
+
+        try:
+            supplied_blocked_links = list(self.blocked_links)
+        except TypeError:
+            raise ValueError(
+                "blocked_links must be an iterable of UAV ID pairs"
+            ) from None
+        canonical_blocked_links: set[tuple[int, int]] = set()
+        for pair in supplied_blocked_links:
+            if (
+                not isinstance(pair, tuple)
+                or len(pair) != 2
+                or any(
+                    not isinstance(endpoint, int) or isinstance(endpoint, bool)
+                    for endpoint in pair
+                )
+            ):
+                raise ValueError("blocked_links entries must be two-item UAV ID tuples")
+            left_agent_id, right_agent_id = pair
+            if left_agent_id == right_agent_id:
+                raise ValueError("blocked_links must not contain self-links")
+            if not (
+                1 <= left_agent_id <= self.agent_count
+                and 1 <= right_agent_id <= self.agent_count
+            ):
+                raise ValueError(
+                    "blocked_links entries must identify configured agents"
+                )
+            canonical_blocked_links.add(
+                (
+                    min(left_agent_id, right_agent_id),
+                    max(left_agent_id, right_agent_id),
+                )
+            )
+        object.__setattr__(self, "blocked_links", frozenset(canonical_blocked_links))
+        if self.region_jammer is not None and not isinstance(
+            self.region_jammer, RegionJammer
+        ):
+            raise ValueError("region_jammer must be a RegionJammer instance")
 
         positive_floats = {
             "area_width": self.area_width,

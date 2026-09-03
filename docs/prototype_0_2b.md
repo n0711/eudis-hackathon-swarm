@@ -1,5 +1,12 @@
 # Prototype 0.2B: graph-mediated peer state delivery
 
+> Historical scope: this document records the 0.2B one-hop heartbeat transport
+> and its original measurements. The current architecture retains one-hop
+> heartbeats but later adds deterministic multi-hop flooding for immutable task
+> and failure-protocol evidence plus receiver-local claim-authorized task control.
+> See
+> [the distributed-state foundation](distributed_state_foundation.md).
+
 ## Objective
 
 Prototype 0.2B turns the Prototype 0.2A communication graph into a small,
@@ -77,7 +84,7 @@ delivery and refresh.
 
 ## Deterministic four-UAV trace
 
-Run:
+At the Prototype 0.2B baseline revision, run:
 
 ```console
 python -m eudis_swarm.simulation --failure-time 100 --communication-range 130 --comm-fault-agent 2 --comm-fault-start 4 --comm-fault-end 8 --peer-state-stale-after 2.5
@@ -97,6 +104,11 @@ The seeded result is:
 The delivery metrics are 144 attempts, 120 deliveries, and 24 link-gated
 non-deliveries. There are six stale and six refresh transitions, with at most six
 simultaneous stale observations.
+
+These figures archive the 0.2B acceptance result. Current `main` retains the
+scenario but includes later failure- and ownership-protocol phases, so this same
+command is not expected to reproduce the historical mission time or message
+totals.
 
 ## Metrics and logging
 
@@ -148,11 +160,12 @@ python -m build
 
 ## Deliberately deferred
 
-Within its historical scope, Prototype 0.2B does not implement
+Within its historical scope, Prototype 0.2B did not implement
 communications-aware allocation or task release, connectivity-aware path
 planning, relay roles, consensus, leader election,
 multi-hop routing, forwarding, flooding, retransmission, message queues, latency,
 jitter, bandwidth, stochastic loss, RF propagation, ROS 2, DDS, MAVLink,
-autopilots, SITL, Gazebo, or quantum optimization. Those belong to later,
-separately scoped prototypes. Prototype 0.3A subsequently adds only the optional
-new-task allocation policy documented in [its own design](prototype_0_3a.md).
+autopilots, SITL, Gazebo, or quantum optimization. Later milestones add the
+optional 0.3A new-task policy, receiver-local claim ownership, a small radio-link
+option, and immutable evidence flooding; they do not change the historical 0.2B
+heartbeat results above.

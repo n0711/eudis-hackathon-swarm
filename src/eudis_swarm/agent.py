@@ -47,7 +47,7 @@ class Heartbeat:
 
 @dataclass(slots=True)
 class Agent:
-    """A point-mass UAV abstraction with no aircraft dynamics."""
+    """A point-mass UAV whose ``current_task`` is an intent, not authority."""
 
     agent_id: int
     position: Position

@@ -66,7 +66,9 @@ def test_failed_uav_task_is_reassigned_and_mission_completes() -> None:
     # it lapses.  Reassignment follows lease expiry, not the declaration.
     assert orphan.reassigned_at is not None
     assert orphan.reassigned_at > orphan.orphaned_at
-    assert orphan.reassigned_at == pytest.approx(3.5)
+    # The failed owner last published at t=0; acquisition becomes legal only
+    # strictly after the 2.5 s receiver-local lease boundary.
+    assert orphan.reassigned_at == pytest.approx(3.0)
 
     frozen_positions = {
         position

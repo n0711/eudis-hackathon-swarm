@@ -120,13 +120,12 @@ def test_multiple_local_claimants_are_contested() -> None:
     )
 
 
-def test_leases_stop_the_coordinator_handing_out_work_it_does_not_own() -> None:
-    """Mission is no longer the single writer of task ownership.
+def test_local_claims_replace_coordinator_assignment_and_converge() -> None:
+    """Mission is no longer the decision-maker for task ownership.
 
-    A partitioned UAV keeps a live lease on its task.  The coordinator cannot
-    see that claim, wants to reassign the work, and is refused until the lease
-    lapses.  When the partition heals the competing claims meet and the loser
-    yields, so ownership converges without anybody being overruled centrally.
+    A partitioned UAV keeps a live lease on its task while other replicas may
+    make different local choices. Reconnection distributes completion/release
+    evidence, and stale execution intents stand down without central revocation.
     """
 
     result = Simulation(
@@ -140,17 +139,19 @@ def test_leases_stop_the_coordinator_handing_out_work_it_does_not_own() -> None:
     ).run()
     metrics = result.metrics
 
-    # allocation proposals were actually blocked by leases held elsewhere.
-    assert metrics.claim_refused_allocation_count > 0
+    # The compatibility allocator was never asked to propose ownership.
+    assert metrics.claim_refused_allocation_count == 0
+    assert any(
+        event.kind is MissionEventKind.TASK_CLAIMED for event in result.mission.events
+    )
 
-    # reconnection surfaced a genuine contest, and it was resolved by release.
-    assert metrics.contested_task_yield_count == 1
-    yielded = [
+    # Completion and reconciliation evidence invalidate obsolete local intents.
+    stood_down = [
         event
         for event in result.mission.events
-        if event.kind is MissionEventKind.TASK_YIELDED
+        if event.kind is MissionEventKind.TASK_STOOD_DOWN
     ]
-    assert len(yielded) == 1
+    assert {event.agent_id for event in stood_down} == {2, 3}
 
     # no contest survives reconciliation anywhere in the swarm.  (Evidence for
     # the very last completion has not been broadcast when the mission ends,

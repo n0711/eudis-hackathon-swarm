@@ -31,7 +31,7 @@ def _validate_epoch(epoch: int) -> int:
 
 @dataclass(frozen=True, slots=True)
 class TaskClaim:
-    """An immutable owner-scoped publication for one task."""
+    """An immutable owner-scoped publication using its owner's source clock."""
 
     task_id: int
     owner_agent_id: int
@@ -380,10 +380,10 @@ class TaskClaimStore:
         return claim
 
     def receive_claim(self, claim: TaskClaim, received_at: float) -> bool:
-        """Apply one delivered publication and report whether it advanced its owner."""
+        """Apply a publication using ``received_at`` as this receiver's local time."""
 
         received_at = self._observe_time(received_at)
-        self._validate_delivered_claim(claim, received_at)
+        self._validate_delivered_claim(claim)
         return self._record_claim(claim, received_at)
 
     def advance_time(self, timestamp: float) -> tuple[int, ...]:
@@ -511,10 +511,10 @@ class TaskClaimStore:
         release: TaskClaimRelease,
         received_at: float,
     ) -> bool:
-        """Apply exact losing-claim evidence without invalidating any successor."""
+        """Apply exact losing-claim evidence at this receiver's local time."""
 
         received_at = self._observe_time(received_at)
-        self._validate_release(release, received_at)
+        self._validate_release(release)
         if (
             release.releasing_agent_id == self._owner_agent_id
             and self._outgoing_releases.get(release.losing_claim.claim_id) != release
@@ -544,10 +544,10 @@ class TaskClaimStore:
         evidence: TaskCompletionEvidence,
         received_at: float,
     ) -> bool:
-        """Accept self-contained delivered completion as an absorbing local fact."""
+        """Accept completion at local receipt time as an absorbing fact."""
 
         received_at = self._observe_time(received_at)
-        self._validate_completion(evidence, received_at)
+        self._validate_completion(evidence)
         return self._record_completion(evidence, received_at, locally_created=False)
 
     def claims_for_broadcast(self, timestamp: float) -> tuple[TaskClaim, ...]:
@@ -895,40 +895,22 @@ class TaskClaimStore:
     def _is_complete(self, task_id: int) -> bool:
         return bool(self._known_completions[task_id])
 
-    def _validate_delivered_claim(
-        self,
-        claim: TaskClaim,
-        received_at: float,
-    ) -> None:
+    def _validate_delivered_claim(self, claim: TaskClaim) -> None:
         self._require_task(claim.task_id)
         self._require_agent(claim.owner_agent_id)
-        if claim.created_at > received_at:
-            raise ValueError("claim creation timestamp cannot follow receipt time")
         if (
             claim.freshness_timeout != self._freshness_timeout
             or claim.lease_timeout != self._lease_timeout
         ):
             raise ValueError("claim lease policy does not match this store")
 
-    def _validate_release(
-        self,
-        release: TaskClaimRelease,
-        received_at: float,
-    ) -> None:
-        self._validate_delivered_claim(release.losing_claim, received_at)
+    def _validate_release(self, release: TaskClaimRelease) -> None:
+        self._validate_delivered_claim(release.losing_claim)
         if release.winning_claim is not None:
-            self._validate_delivered_claim(release.winning_claim, received_at)
-        if release.created_at > received_at:
-            raise ValueError("claim-release timestamp cannot follow receipt time")
+            self._validate_delivered_claim(release.winning_claim)
 
-    def _validate_completion(
-        self,
-        evidence: TaskCompletionEvidence,
-        received_at: float,
-    ) -> None:
-        self._validate_delivered_claim(evidence.claim, received_at)
-        if evidence.created_at > received_at:
-            raise ValueError("task-completion timestamp cannot follow receipt time")
+    def _validate_completion(self, evidence: TaskCompletionEvidence) -> None:
+        self._validate_delivered_claim(evidence.claim)
 
     def _observe_time(self, timestamp: float) -> float:
         timestamp = validate_timestamp(

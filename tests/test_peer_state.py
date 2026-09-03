@@ -6,7 +6,8 @@ from __future__ import annotations
 import pytest
 
 from eudis_swarm.agent import Agent, AgentStatus, Heartbeat
-from eudis_swarm.communication import CommunicationGraph
+from eudis_swarm.communication import CommunicationGraph, CommunicationState
+from eudis_swarm.failure_manager import FailureManager
 from eudis_swarm.messaging import PeerStateTransport
 from eudis_swarm.peer_state import PeerKnowledgeState, PeerStateStore, PeerStatus
 
@@ -69,6 +70,67 @@ def test_missing_link_does_not_populate_peer_state() -> None:
     assert source.position == (1.0, 0.0)
 
 
+def test_partition_exposes_no_graph_oracle_to_peer_state_or_failure_logic() -> None:
+    agent_ids = (1, 2, 3)
+    positions = {agent_id: (0.0, 0.0) for agent_id in agent_ids}
+    source = Agent(agent_id=1, position=positions[1], speed=1.0)
+    graph = CommunicationGraph(agent_ids, communication_range=1.0)
+    stores = _stores(agent_ids)
+    receiver_store = stores[2]
+    transport = PeerStateTransport(graph, stores)
+    failure_manager = FailureManager(2.5, stores)
+
+    graph.update(positions)
+    initial = source.send_heartbeat(0.0)
+    assert initial is not None
+    transport.deliver((initial,), 0.0, receiving_agent_ids=(2,))
+    assert receiver_store.status_for(1) is PeerStatus.HEARD
+
+    # The world knows UAV 1 is isolated.  A failed packet provides no matching
+    # oracle fact to UAV 2, so its last delivered evidence remains HEARD.
+    graph.update(positions, blocked_links={(1, 2), (1, 3)})
+    assert graph.communication_state(1) is CommunicationState.UNREACHABLE
+    undelivered = source.send_heartbeat(1.0)
+    assert undelivered is not None
+    transport.deliver((undelivered,), 1.0, receiving_agent_ids=(2,))
+    assert receiver_store.status_for(1) is PeerStatus.HEARD
+    retained = receiver_store.observation_for(1)
+    assert retained is not None
+    assert retained.snapshot == initial
+
+    # Only receiver-local elapsed time changes the belief to SILENT.  Failure
+    # logic may create a suspicion vote, but one local timeout is not failure.
+    assert receiver_store.advance_time(2.5001) == (1,)
+    assert receiver_store.status_for(1) is PeerStatus.SILENT
+    votes = failure_manager.propose_votes(
+        2.5001,
+        participating_agent_ids=(2,),
+    )
+    assert [(vote.voter_agent_id, vote.suspected_agent_id) for vote in votes] == [
+        (2, 1)
+    ]
+    assert (
+        failure_manager.detect_declarations(
+            2.5001,
+            participating_agent_ids=(2,),
+        )
+        == ()
+    )
+    assert receiver_store.status_for(1) is PeerStatus.SILENT
+    assert receiver_store.declared_failed_peer_ids == frozenset()
+
+    # Physical reconnection is equally invisible until a packet is received.
+    graph.update(positions)
+    assert graph.communication_state(1) is CommunicationState.REACHABLE
+    assert receiver_store.status_for(1) is PeerStatus.SILENT
+    refreshed = source.send_heartbeat(3.0)
+    assert refreshed is not None
+    transport.deliver((refreshed,), 3.0, receiving_agent_ids=(2,))
+    assert receiver_store.status_for(1) is PeerStatus.HEARD
+    assert source.responsive is True
+    assert source.status is AgentStatus.IDLE
+
+
 def test_delivered_snapshot_is_immutable_and_not_a_live_agent_view() -> None:
     graph = CommunicationGraph((1, 2), communication_range=10.0)
     graph.update({1: (0.0, 0.0), 2: (1.0, 0.0)})
@@ -123,6 +185,24 @@ def test_peer_freshness_uses_strict_timeout_and_refreshes() -> None:
     assert store.state_for(2) is PeerKnowledgeState.STALE
     assert store.receive(_snapshot(2, 3.0), 3.0) is True
     assert store.state_for(2) is PeerKnowledgeState.FRESH
+
+
+def test_source_clock_may_lead_receiver_clock_but_freshness_stays_local() -> None:
+    store = PeerStateStore(1, (2,), stale_after=2.5)
+
+    assert store.receive(_snapshot(2, 100.0), received_at=5.0) is False
+    observation = store.observation_for(2)
+    assert observation is not None
+    assert observation.snapshot.timestamp == 100.0
+    assert observation.received_at == 5.0
+
+    assert store.advance_time(7.5) == ()
+    assert store.state_for(2) is PeerKnowledgeState.FRESH
+    assert store.advance_time(7.5001) == (2,)
+    assert store.state_for(2) is PeerKnowledgeState.STALE
+
+    with pytest.raises(ValueError, match="receipt timestamp must not move backwards"):
+        store.receive(_snapshot(2, 101.0), received_at=7.0)
 
 
 def test_silence_and_insufficient_quorum_never_declare_failure() -> None:

@@ -42,6 +42,40 @@ def test_default_trace_round_trip_preserves_failure_and_recovery(tmp_path) -> No
         "TASK_RELEASED",
     }
 
+    final_metrics = trace.frames[-1].metrics
+    assert final_metrics.protocol_messages_attempted == (
+        result.metrics.protocol_messages_attempted
+    )
+    assert final_metrics.protocol_messages_delivered == (
+        result.metrics.protocol_messages_delivered
+    )
+    assert final_metrics.protocol_messages_dropped == (
+        result.metrics.protocol_messages_undelivered
+    )
+    assert final_metrics.protocol_messages_forwarded == (
+        result.metrics.protocol_messages_forwarded
+    )
+    assert final_metrics.protocol_duplicates_suppressed == (
+        result.metrics.protocol_duplicates_suppressed
+    )
+    assert final_metrics.protocol_unavailable_link_attempts == (
+        result.metrics.protocol_messages_undelivered
+    )
+    assert final_metrics.protocol_useful_first_deliveries == (
+        result.metrics.protocol_useful_first_deliveries
+    )
+    assert final_metrics.protocol_duplicate_source_publications == (
+        result.metrics.protocol_duplicate_source_publications
+    )
+    assert final_metrics.protocol_duplicate_route_suppressions == (
+        result.metrics.protocol_duplicate_route_suppressions
+    )
+    assert final_metrics.protocol_inactive_endpoint_deferrals == (
+        result.metrics.protocol_inactive_endpoint_deferrals
+    )
+    assert final_metrics.protocol_messages_delivered > 0
+    assert final_metrics.protocol_duplicates_suppressed > 0
+
     destination = tmp_path / "trace.json"
     trace.write_json(destination)
     restored = SimulationTrace.read_json(destination)
@@ -141,8 +175,8 @@ def test_cli_record_trace_writes_loadable_artifact(tmp_path) -> None:
 def test_trace_frame_carries_world_truth_belief_and_ownership_together() -> None:
     """One frame now records all three layers, so divergence is replayable.
 
-    During the outage UAV 2 and UAV 3 each believe they own Task 20. Neither
-    can see the contest -- they are partitioned -- so the disagreement is only
+    During the outage UAV 2 completes Task 20 locally while UAV 3 independently
+    claims it. Neither can see the other evidence, so the disagreement is only
     visible by comparing replicas, which is exactly what the frame stores.
     """
 
@@ -166,19 +200,16 @@ def test_trace_frame_carries_world_truth_belief_and_ownership_together() -> None
     disputed_frames = [frame for frame in trace.frames if frame.disputed_task_ids]
     assert disputed_frames, "the split brain never appeared in the trace"
 
-    frame = disputed_frames[0]
-    assert frame.disputed_task_ids == (20,)
+    frame = next(item for item in disputed_frames if 20 in item.disputed_task_ids)
 
     # world truth and belief live side by side in the same frame.
     uav2 = next(agent for agent in frame.agents if agent.agent_id == 2)
     assert uav2.responsive is True
 
-    claimants = {
-        view.observer_agent_id: view.known_owner_agent_id
-        for view in frame.ownership
-        if view.task_id == 20 and view.state == "OWNED_BY_SELF"
+    owners = {
+        view.known_owner_agent_id for view in frame.ownership if view.task_id == 20
     }
-    assert claimants == {2: 2, 3: 3}
+    assert owners == {2, 3}
 
     # and the disagreement resolves by the end of the mission.
     assert trace.frames[-1].disputed_task_ids == ()

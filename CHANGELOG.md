@@ -30,8 +30,9 @@ and interfaces change between prototypes.
   `DECLARED_FAILED` meanings, while retaining `PeerKnowledgeState` for snapshot
   freshness.
 - Graph-mediated `FailureVote` and `FailureDeclaration` exchange with isolated
-  receiver mailboxes, retryable votes and certificates, timeout-bounded vote
-  evidence, and a strict-majority quorum with a two-voter minimum.
+  receiver mailboxes, retryable votes and certificates, receiver-local
+  timeout-bounded vote evidence, and a strict-majority quorum with a two-voter
+  minimum.
 - Canonical undirected `blocked_links` and `CommunicationGraph.can_deliver()`
   for deterministic single-link, balanced-partition, and reconnection cases.
 - The exact six-state `TaskOwnershipState` vocabulary and a classifier that
@@ -44,8 +45,28 @@ and interfaces change between prototypes.
 - One `TaskClaimStore` per UAV with distinct freshness and lease boundaries,
   owner-scoped renewal epochs, explicit `CONTESTED` reconciliation, replay
   tombstones, voluntary release, and monotonic `COMPLETE`.
-- `TaskClaimTransport`, which routes ownership evidence only across active
-  one-hop `CommunicationGraph` links and records per-receiver delivery results.
+- Frozen `TaskObjective` catalogue entries and a pure
+  `ReceiverLocalTaskUtility` that ranks weighted distance, resource,
+  communication, and role costs without accepting `Mission`, mutable `Task`,
+  topology, or remote live-agent inputs.
+- The authoritative distributed task-control round: batch receiver-local claim
+  intents, create claims before binding work, gossip and reconcile evidence,
+  activate only local owners, stand down losers, and replan to a fixed point.
+- Deterministic store-and-forward flooding for `TaskClaim`,
+  `TaskClaimRelease`, `TaskCompletionEvidence`, `FailureVote`, and
+  `FailureDeclaration`. Structural message IDs, per-receiver duplicate
+  suppression, stable traversal order, persistent retry of unsuccessful routes,
+  and finite seen state make propagation loop-safe without a TTL.
+- Transport receipts that distinguish logical origin, forwarding UAV,
+  receiver, and hop count, plus delivery/forwarding/duplicate-suppression
+  counters for observer-only diagnostics.
+- Classified protocol counters for logical forwarding attempts, successful and
+  useful first deliveries, unavailable-link attempts, duplicate source
+  publications, duplicate-route suppressions, and unique inactive-endpoint
+  deferrals.
+- `TaskClaimTransport`, which propagates ownership evidence across connected
+  multi-hop `CommunicationGraph` components while preserving immutable claim
+  ownership and generation.
 - A deterministic `{1,2}` / `{3,4}` split-brain demonstration in
   `eudis_swarm.task_claim_demo`, including reconnect, unanimous reconciliation,
   losing release, and continued work.
@@ -56,27 +77,42 @@ and interfaces change between prototypes.
 ### Changed
 
 - Heartbeat creation no longer records authoritative source state directly in a
-  centralized failure cache. Heartbeats, failure votes, and declarations must
-  pass through the modeled one-hop transport before becoming remote evidence.
+  centralized failure cache. Heartbeats remain one-hop observations; failure
+  votes and declarations must pass through modeled store-and-forward delivery
+  before becoming remote evidence.
 - `Mission` now applies failure recovery only after receiving a validated
   quorum-backed declaration; silence and link loss remain non-authoritative.
 - Failure detection no longer consults link ground truth. `PeerStatus.UNREACHABLE`,
   `observe_link_state()` and `PeerStateTransport.synchronize_link_evidence()` are
   removed: a receiver knows only what it heard and when, so a healthy but
   partitioned UAV can now be wrongly declared dead.
-- A declaration is belief, not a kill switch. It sets `status` only; motion,
-  heartbeats and failure injection depend on `responsive` alone.
+- A declaration is belief, not a kill switch. It sets `status` only; heartbeats
+  and failure injection depend on `responsive`, while operational motion also
+  requires the cached intent to match a locally owned claim.
 - Declarations are reversible: first-hand contact retracts one locally, and a
   quorum of retractions withdraws it in the world.
-- `Mission` is no longer the single writer of ownership. Allocation is refused
-  for any task whose lease is still valid in the assigning UAV's claim store,
-  and a UAV that loses reconciliation yields the task.
+- Normal `Simulation` task control no longer calls the centralized allocator.
+  Each responsive idle UAV ranks its immutable objective catalogue from local
+  inputs, creates a claim, and binds work only after its own store reports
+  `OWNED_BY_SELF`; the legacy allocators remain comparison baselines.
+- `Agent.current_task` is now an execution-intent cache rather than ownership
+  authority. Actual and projected motion, renewal, and completion all require
+  `TaskClaimStore.owns_task()`; loss, release, expiry, or completion stands the
+  UAV down before it replans.
+- Mutable `Task.status` and `Task.assigned_agent` are maintained as observer
+  projections only and are not read to select, claim, or authorize local work.
+- A fail-stop owner no longer triggers immediate claim reassignment. It stops
+  renewing, and another receiver may claim the task only after its locally
+  received lease has strictly expired.
+- Claim renewal is paced at the local freshness threshold instead of every
+  simulation tick.
 - The playback trace (schema version 2) carries world truth, per-agent belief
   and every replica's ownership view in one frame, with disputed tasks flagged.
 - Non-participating UAV software no longer advances or receives updates to its
-  private freshness and link-evidence state.
-- Connectivity scoring now consumes only complete `HEARD` status, so raw-fresh
-  snapshots do not influence decisions after silence, link loss, or declaration.
+  private freshness state.
+- The connectivity task-control option derives its communication utility only
+  from that receiver's complete `HEARD` snapshots, so raw-fresh or live remote
+  state cannot influence intent after silence, link loss, or declaration.
 - Communication graph updates may combine the existing whole-agent block with
   explicit link-level blocks without changing the existing API defaults.
 - `HeartbeatTimeout` remains available as an import-compatible alias for the
@@ -84,14 +120,28 @@ and interfaces change between prototypes.
 - The distributed-state guide now specifies the task-ownership EFSM, strict
   stale-versus-expired boundary, owner-local epoch meaning, deterministic
   cross-owner rule, and absorbing completion semantics.
+- Protocol control decisions now distinguish source-clock metadata
+  (`created_at`, `detected_at`, and heartbeat emission timestamps) from
+  receiver-local `received_at`. Silence, vote retention, freshness, and lease
+  expiry use receiver-local receipt age; duplicate forwardable evidence does not
+  refresh it, while each delivered heartbeat remains new first-hand contact.
+- Connected topology now means protocol evidence can converge without direct
+  all-to-all links. Physical link availability remains world truth and is never
+  copied into `PeerStateStore`.
 
 ### Fixed
 
-- A rejoining UAV no longer keeps a pointer to work reassigned while it was
-  believed dead. `Mission.retract_declaration` surrenders the stale task and
-  releases the matching claim, so `assert_consistent()` cannot raise
-  `agent/task ownership links do not match` when a wrongly declared UAV fails
-  to reach its task before communications return.
+- Protocol telemetry no longer counts repeated evaluations toward inactive
+  endpoints as link attempts. In the audited pre-fix default run, the entire
+  `15,075 - 474 = 14,601` attempt/success gap targeted failed, inactive UAV 2
+  even though the graph stayed a clique; instrumentation classified 97.1% of
+  those evaluations as repeats. Deduplicating the same outstanding work exposed
+  141 unique `(message, inactive receiver)` obligations. The transport now
+  defers those obligations and excludes them from the link-attempt denominator.
+- In the legacy non-distributed path, a rejoining UAV no longer keeps a pointer
+  to work reassigned while it was believed dead. The normal distributed path
+  now resolves that situation from claim evidence rather than an observer task
+  pointer.
 - Declaration certificates are retransmitted, so a certificate built from
   evidence older than a snapshot the receiver has since accepted is now
   rejected. Previously such a replay could silently re-declare a UAV the swarm

@@ -33,14 +33,15 @@ class FailureVote:
         validate_positive_integer(self.suspected_agent_id, name="suspected_agent_id")
         if self.voter_agent_id == self.suspected_agent_id:
             raise ValueError("an agent cannot vote for its own failure")
-        last_heartbeat = validate_timestamp(
-            self.last_heartbeat, name="last heartbeat timestamp"
-        )
+        # The heartbeat timestamp belongs to the suspected UAV's clock.  It is
+        # useful as a source-scoped evidence generation, but it cannot be
+        # ordered against timestamps from the voter's local clock.
+        validate_timestamp(self.last_heartbeat, name="last heartbeat timestamp")
         last_heard_at = validate_timestamp(
             self.last_heard_at,
-            previous=last_heartbeat,
             name="last-heard timestamp",
         )
+        # These two values do share the voter's clock domain.
         validate_timestamp(
             self.created_at,
             previous=last_heard_at,
@@ -67,12 +68,11 @@ class FailureDeclaration:
         validate_positive_integer(self.declarer_agent_id, name="declarer_agent_id")
         if self.agent_id == self.declarer_agent_id:
             raise ValueError("an agent cannot declare its own failure")
+        # ``last_heartbeat`` is target-authored metadata while ``detected_at``
+        # is local to the declarer.  Clock skew may put either numeric value
+        # first, so validate them independently.
         validate_timestamp(self.last_heartbeat, name="last heartbeat timestamp")
-        validate_timestamp(
-            self.detected_at,
-            previous=self.last_heartbeat,
-            name="failure-declaration timestamp",
-        )
+        validate_timestamp(self.detected_at, name="failure-declaration timestamp")
         if self.task_id is not None:
             validate_positive_integer(self.task_id, name="task_id")
         validate_positive_integer(self.required_votes, name="required_votes")
@@ -93,6 +93,17 @@ class FailureDeclaration:
 HeartbeatTimeout = FailureDeclaration
 
 
+@dataclass(frozen=True, slots=True)
+class _ReceivedFailureVote:
+    """One immutable vote paired with its receiver-local acceptance time."""
+
+    vote: FailureVote
+    received_at: float
+
+    def __post_init__(self) -> None:
+        validate_timestamp(self.received_at, name="failure-vote received_at")
+
+
 class FailureManager:
     """Coordinate local detector replicas without reading authoritative agents."""
 
@@ -108,7 +119,10 @@ class FailureManager:
         self._agent_ids: tuple[int, ...] = ()
         self._agent_id_set: frozenset[int] = frozenset()
         # each receiver owns an isolated vote mailbox in the protocol model.
-        self._votes_by_receiver: dict[int, dict[int, dict[int, FailureVote]]] = {}
+        self._votes_by_receiver: dict[
+            int, dict[int, dict[int, _ReceivedFailureVote]]
+        ] = {}
+        self._last_vote_received_at: dict[int, float | None] = {}
         # locally originated certificates persist so dropped broadcasts can retry.
         self._declarations_by_declarer: dict[int, dict[int, FailureDeclaration]] = {}
         self._reported_agent_ids: set[int] = set()
@@ -200,6 +214,7 @@ class FailureManager:
         self._agent_ids = agent_ids
         self._agent_id_set = agent_id_set
         self._votes_by_receiver = {agent_id: {} for agent_id in agent_ids}
+        self._last_vote_received_at = {agent_id: None for agent_id in agent_ids}
         self._declarations_by_declarer = {agent_id: {} for agent_id in agent_ids}
 
     def propose_votes(
@@ -208,7 +223,7 @@ class FailureManager:
         *,
         participating_agent_ids: Iterable[int] | None = None,
     ) -> tuple[FailureVote, ...]:
-        """Create retryable local votes from continuously reachable stale evidence."""
+        """Create retryable local votes from receiver-local silence evidence."""
 
         timestamp = self._observe_time(timestamp)
         participants = self._participants(participating_agent_ids)
@@ -241,29 +256,63 @@ class FailureManager:
                 )
                 # the local mailbox is idempotent by voter, while retransmission
                 # lets the same evidence cross a link that was previously down.
-                self.record_vote(voter_agent_id, vote)
+                self.record_vote(voter_agent_id, vote, received_at=timestamp)
                 votes.append(vote)
         return tuple(votes)
 
-    def record_vote(self, receiver_agent_id: int, vote: FailureVote) -> None:
-        """Put a delivered vote only into the named receiver's local mailbox."""
+    def record_vote(
+        self,
+        receiver_agent_id: int,
+        vote: FailureVote,
+        received_at: float | None = None,
+    ) -> bool:
+        """Put a delivered vote into one receiver-local mailbox.
+
+        ``vote.created_at`` is source-clock metadata.  Protocol transports
+        should pass the receiver's local acceptance time as ``received_at``;
+        omitting it retains the historical direct-call API by treating the
+        emission time as an immediate local receipt.  Exact retransmissions do
+        not refresh the stored receipt time, and delayed obsolete generations
+        are ignored safely.
+        """
 
         self._require_configured()
         self._require_agent(receiver_agent_id, name="receiver_agent_id")
         self._require_agent(vote.voter_agent_id, name="voter_agent_id")
         self._require_agent(vote.suspected_agent_id, name="suspected_agent_id")
+        received_at = validate_timestamp(
+            vote.created_at if received_at is None else received_at,
+            name="failure-vote received_at",
+        )
+        previous_local_time = self._last_vote_received_at[receiver_agent_id]
+        received_at = validate_timestamp(
+            received_at,
+            previous=previous_local_time,
+            name="failure-vote received_at",
+        )
+        self._last_vote_received_at[receiver_agent_id] = received_at
         if receiver_agent_id == vote.suspected_agent_id:
-            return
+            return False
         votes_for_target = self._votes_by_receiver[receiver_agent_id].setdefault(
             vote.suspected_agent_id, {}
         )
         previous = votes_for_target.get(vote.voter_agent_id)
         if previous is not None:
-            if vote.created_at < previous.created_at:
-                raise ValueError("delivered failure votes must not move backwards")
-            if vote.last_heartbeat < previous.last_heartbeat:
-                raise ValueError("failure-vote evidence must not move backwards")
-        votes_for_target[vote.voter_agent_id] = vote
+            if vote == previous.vote:
+                return False
+            previous_generation = self._vote_generation(previous.vote)
+            generation = self._vote_generation(vote)
+            if generation < previous_generation:
+                return False
+            if generation == previous_generation:
+                raise ValueError(
+                    "one failure-vote generation cannot carry conflicting evidence"
+                )
+        votes_for_target[vote.voter_agent_id] = _ReceivedFailureVote(
+            vote=vote,
+            received_at=received_at,
+        )
+        return True
 
     def detect_declarations(
         self,
@@ -298,11 +347,14 @@ class FailureManager:
                 matching_voters = tuple(
                     sorted(
                         voter_agent_id
-                        for voter_agent_id, vote in votes.items()
-                        if vote.last_heartbeat == observation.snapshot.timestamp
-                        and vote.task_id == observation.snapshot.current_task
-                        and vote.created_at <= timestamp
-                        and timestamp - vote.created_at <= self.heartbeat_timeout
+                        for voter_agent_id, received_vote in votes.items()
+                        if received_vote.vote.last_heartbeat
+                        == observation.snapshot.timestamp
+                        and received_vote.vote.task_id
+                        == observation.snapshot.current_task
+                        and 0.0
+                        <= timestamp - received_vote.received_at
+                        <= self.heartbeat_timeout
                     )
                 )
                 if (
@@ -356,6 +408,12 @@ class FailureManager:
         )
         self._last_timestamp = timestamp
         return timestamp
+
+    @staticmethod
+    def _vote_generation(vote: FailureVote) -> tuple[float, float, float]:
+        """Order evidence only within its two stable source clock domains."""
+
+        return (vote.last_heartbeat, vote.last_heard_at, vote.created_at)
 
     def _require_configured(self) -> None:
         if not self._stores:

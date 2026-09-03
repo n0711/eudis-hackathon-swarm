@@ -1,7 +1,8 @@
-"""Propose deterministic assignments for the authoritative mission coordinator.
+"""Legacy deterministic assignment proposals and comparison scoring.
 
-Connectivity scoring uses only receiver-local peer evidence, while the still-central
-assignment step is intentionally documented as later distributed-systems work.
+The normal simulation does not invoke this centralized allocator: receiver-local
+utility, claims, gossip, and ``TaskClaimStore.owns_task`` govern execution there.
+These helpers remain for compatibility, focused unit tests, and policy comparisons.
 """
 
 from __future__ import annotations

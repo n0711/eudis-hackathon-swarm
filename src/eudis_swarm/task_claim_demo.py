@@ -369,7 +369,10 @@ def run_task_claim_partition_demo() -> TaskClaimDemoResult:
         (left_claim, right_claim),
         3.7,
     )
-    assert reconnect_batch.delivered == 6
+    # Store-and-forward also drains immutable evidence queued by earlier epochs.
+    # The deterministic demo therefore exposes 30 first deliveries on reconnect,
+    # including the four missing copies of the two current contested claims.
+    assert reconnect_batch.delivered == 30
     for observer_agent_id in DEMO_AGENT_IDS:
         view = stores[observer_agent_id].view(DEMO_CONTESTED_TASK_ID, 3.7)
         assert view.state is TaskOwnershipState.CONTESTED

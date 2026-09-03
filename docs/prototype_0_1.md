@@ -1,5 +1,11 @@
 # Prototype 0.1 technical design
 
+> Historical scope: this document records the original centralized physical
+> failure/recovery baseline and its acceptance results. The normal mission now
+> uses receiver-local utility, replicated task claims, and `owns_task()` as
+> execution authority. The 0.1 allocator remains a comparison baseline; see
+> [the distributed-state foundation](distributed_state_foundation.md).
+
 ## Scope and acceptance criterion
 
 Prototype 0.1 is the minimum executable resilience proof for the EUDIS Swarm

@@ -1,4 +1,4 @@
-"""Define authoritative mission tasks and the exact local ownership vocabulary.
+"""Define observer-facing mission tasks and the local ownership vocabulary.
 
 The legacy heartbeat classifier remains a compatibility helper, while the formal
 lease and reconciliation state machine lives in the pointer-free claim protocol.
@@ -83,7 +83,12 @@ def classify_task_ownership(
 
 @dataclass(slots=True)
 class Task:
-    """A point exploration task in the mission area."""
+    """A point objective with observer-facing progress and owner projection.
+
+    In distributed-control runs, ``assigned_agent`` is not authorization and
+    cannot represent concurrent partition-local owners. ``TaskClaimStore`` is
+    the only operational ownership source.
+    """
 
     task_id: int
     position: Position
