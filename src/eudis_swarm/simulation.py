@@ -129,7 +129,11 @@ class Simulation:
             allocation_policy=config.allocation_policy,
         )
         self.communication_graph = CommunicationGraph(
-            selected_agent_ids, config.communication_range
+            selected_agent_ids,
+            config.communication_range,
+            radio_model=(config.radio_model if config.link_model == "radio" else None),
+            stochastic_links=config.stochastic_delivery,
+            link_seed=config.random_seed,
         )
         self.peer_state_stores = {
             owner_agent_id: PeerStateStore(
@@ -887,7 +891,21 @@ def _parser() -> argparse.ArgumentParser:
         "--communication-range",
         type=float,
         default=130.0,
-        help="abstract maximum distance for an active communication link",
+        help="abstract maximum distance for an active communication link "
+        "(used only by --link-model range)",
+    )
+    parser.add_argument(
+        "--link-model",
+        choices=("range", "radio"),
+        default="range",
+        help="communication link model: 'range' distance threshold (default) "
+        "or 'radio' free-space line-of-sight BER model",
+    )
+    parser.add_argument(
+        "--stochastic-delivery",
+        action="store_true",
+        help="with --link-model radio, sample each link's availability from its "
+        "delivery probability using the run seed",
     )
     parser.add_argument(
         "--comm-fault-agent",
@@ -941,6 +959,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             peer_state_stale_after=arguments.peer_state_stale_after,
             allocation_policy=arguments.allocation_policy,
             communication_range=arguments.communication_range,
+            link_model=arguments.link_model,
+            stochastic_delivery=arguments.stochastic_delivery,
             comm_fault_agent_id=arguments.comm_fault_agent,
             comm_fault_start=arguments.comm_fault_start,
             comm_fault_end=arguments.comm_fault_end,

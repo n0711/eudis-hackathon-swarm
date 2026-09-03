@@ -1,17 +1,155 @@
 """Model deterministic undirected communication topology for the swarm simulator.
-Links combine distance-based reachability with whole-agent and link-level faults."""
+Links combine reachability with whole-agent and link-level faults.  Reachability
+is either a binary distance threshold or a physical free-space radio model."""
 
 from __future__ import annotations
 
+import random
 from dataclasses import dataclass
 from enum import Enum
 from itertools import combinations
-from math import hypot, isfinite
+from math import erfc, hypot, isfinite, pi, sqrt
 from numbers import Real
 from typing import Iterable, Mapping
 
 from .agent import Position
 from .validation import validate_positive_real
+
+
+@dataclass(frozen=True, slots=True)
+class RadioModel:
+    """Free-space line-of-sight radio link model.
+
+    Implements the free-space LoS relations of Hu, Ren & Cheng
+    (arXiv:2407.11531, eqs. 5-10)::
+
+        L_ij = (4*pi*d_ij*f/c)**2 * xi_los       # path loss factor
+        P_r  = EIRP * g_r / L_ij                  # received power
+        SNR  = P_r / sigma**2
+        BER  = 0.5 * erfc(sqrt(SNR))             # BPSK
+        link up iff BER <= P_e0
+
+    Decibel fields are converted to linear internally; power fields are treated
+    in milliwatts, so ``eirp_dbm`` and ``noise_dbm`` share one linear domain.
+    ``can_link`` applies the paper's hard rule; ``link_quality`` returns a
+    per-frame delivery probability in ``[0, 1]`` for an optional stochastic
+    delivery layer.
+    """
+
+    frequency_hz: float = 2.4e9
+    eirp_dbm: float = 20.0
+    rx_gain_db: float = 3.0
+    xi_los_db: float = 3.0
+    noise_dbm: float = -100.0
+    ber_threshold: float = 1e-5
+    frame_bits: int = 1024
+    speed_of_light_m_s: float = 299_792_458.0
+
+    def __post_init__(self) -> None:
+        for name, value in (
+            ("frequency_hz", self.frequency_hz),
+            ("speed_of_light_m_s", self.speed_of_light_m_s),
+        ):
+            if (
+                not isinstance(value, Real)
+                or isinstance(value, bool)
+                or not isfinite(value)
+                or value <= 0.0
+            ):
+                raise ValueError(f"RadioModel {name} must be finite and positive")
+        for name, value in (
+            ("eirp_dbm", self.eirp_dbm),
+            ("rx_gain_db", self.rx_gain_db),
+            ("xi_los_db", self.xi_los_db),
+            ("noise_dbm", self.noise_dbm),
+        ):
+            if (
+                not isinstance(value, Real)
+                or isinstance(value, bool)
+                or not isfinite(value)
+            ):
+                raise ValueError(f"RadioModel {name} must be a finite decibel value")
+        if (
+            not isinstance(self.frame_bits, int)
+            or isinstance(self.frame_bits, bool)
+            or self.frame_bits <= 0
+        ):
+            raise ValueError("RadioModel frame_bits must be a positive integer")
+        if (
+            not isinstance(self.ber_threshold, Real)
+            or isinstance(self.ber_threshold, bool)
+            or not 0.0 < float(self.ber_threshold) < 1.0
+        ):
+            raise ValueError("RadioModel ber_threshold must lie in (0, 1)")
+
+    @staticmethod
+    def _db_to_linear(decibels: float) -> float:
+        return 10.0 ** (decibels / 10.0)
+
+    @property
+    def _eirp_mw(self) -> float:
+        return self._db_to_linear(self.eirp_dbm)
+
+    @property
+    def _rx_gain_linear(self) -> float:
+        return self._db_to_linear(self.rx_gain_db)
+
+    @property
+    def _xi_los_linear(self) -> float:
+        return self._db_to_linear(self.xi_los_db)
+
+    @property
+    def _noise_mw(self) -> float:
+        return self._db_to_linear(self.noise_dbm)
+
+    def _validate_distance(self, distance: float) -> float:
+        if (
+            not isinstance(distance, Real)
+            or isinstance(distance, bool)
+            or not isfinite(distance)
+            or distance < 0.0
+        ):
+            raise ValueError("radio link distance must be finite and non-negative")
+        return float(distance)
+
+    def path_loss(self, distance: float) -> float:
+        """Return the free-space LoS path loss factor ``L_ij`` (eq. 5)."""
+
+        distance = self._validate_distance(distance)
+        free_space = (
+            4.0 * pi * distance * self.frequency_hz / self.speed_of_light_m_s
+        ) ** 2
+        return free_space * self._xi_los_linear
+
+    def snr(self, distance: float) -> float:
+        """Return the receiver signal-to-noise ratio (eqs. 6-8)."""
+
+        loss = self.path_loss(distance)
+        if loss <= 0.0:
+            # co-located radios have no free-space loss.
+            return float("inf")
+        received_mw = self._eirp_mw * self._rx_gain_linear / loss
+        return received_mw / self._noise_mw
+
+    def bit_error_rate(self, distance: float) -> float:
+        """Return the BPSK bit error rate ``0.5 * erfc(sqrt(SNR))`` (eq. 9)."""
+
+        return 0.5 * erfc(sqrt(self.snr(distance)))
+
+    def can_link(self, distance: float) -> bool:
+        """Return whether ``BER <= ber_threshold`` for a link of that length (eq. 10)."""
+
+        return self.bit_error_rate(distance) <= self.ber_threshold
+
+    def link_quality(self, distance: float) -> float:
+        """Return the per-frame delivery probability in ``[0, 1]``."""
+
+        ber = self.bit_error_rate(distance)
+        if ber <= 0.0:
+            return 1.0
+        if ber >= 1.0:
+            return 0.0
+        return max(0.0, min(1.0, (1.0 - ber) ** self.frame_bits))
 
 
 class CommunicationState(str, Enum):
@@ -87,7 +225,15 @@ class CommunicationGraph:
     initially isolated UAVs are not counted as new isolation events.
     """
 
-    def __init__(self, agent_ids: Iterable[int], communication_range: float) -> None:
+    def __init__(
+        self,
+        agent_ids: Iterable[int],
+        communication_range: float,
+        *,
+        radio_model: RadioModel | None = None,
+        stochastic_links: bool = False,
+        link_seed: int = 0,
+    ) -> None:
         supplied_ids = tuple(agent_ids)
         if not supplied_ids:
             raise ValueError("communication graph requires at least one UAV")
@@ -103,6 +249,19 @@ class CommunicationGraph:
         self._communication_range = validate_positive_real(
             communication_range, name="communication_range"
         )
+        if radio_model is not None and not isinstance(radio_model, RadioModel):
+            raise TypeError("radio_model must be a RadioModel instance")
+        if not isinstance(stochastic_links, bool):
+            raise TypeError("stochastic_links must be boolean")
+        if stochastic_links and radio_model is None:
+            raise ValueError("stochastic_links requires a radio_model")
+        if not isinstance(link_seed, int) or isinstance(link_seed, bool):
+            raise TypeError("link_seed must be an integer")
+        self._radio_model = radio_model
+        self._stochastic_links = stochastic_links
+        # a dedicated stream keeps link sampling reproducible and independent of
+        # any other seeded draw in the run.
+        self._link_rng = random.Random(link_seed) if stochastic_links else None
         # uav membership never changes, so canonical pair order is fixed once.
         self._pair_keys = tuple(combinations(self._agent_ids, 2))
         self._pair_key_set = frozenset(self._pair_keys)
@@ -123,6 +282,35 @@ class CommunicationGraph:
     @property
     def communication_range(self) -> float:
         return self._communication_range
+
+    @property
+    def radio_model(self) -> RadioModel | None:
+        """Return the physical link model, or ``None`` for the range threshold."""
+
+        return self._radio_model
+
+    @property
+    def stochastic_links(self) -> bool:
+        """Whether available links are sampled from their delivery probability."""
+
+        return self._stochastic_links
+
+    def _link_within_reach(self, distance: float) -> bool:
+        """Decide raw reachability for one pair before fault policy is applied.
+
+        Three modes: the binary distance threshold (no radio model); the
+        radio model's hard ``BER <= P_e0`` rule (deterministic); or, when
+        ``stochastic_links`` is set, a seeded draw against the link's
+        delivery probability.  The seeded stream is consumed once per pair
+        per update in fixed pair order, so identical seeds reproduce
+        identical topology histories.
+        """
+
+        if self._radio_model is None:
+            return distance <= self._communication_range
+        if self._link_rng is None:
+            return self._radio_model.can_link(distance)
+        return self._link_rng.random() < self._radio_model.link_quality(distance)
 
     @property
     def blocked_agent_ids(self) -> frozenset[int]:
@@ -238,8 +426,11 @@ class CommunicationGraph:
                 destination[0] - source[0],
                 destination[1] - source[1],
             )
+            # reachability is sampled first so the seeded stream is consumed in a
+            # fixed pair order regardless of the fault policy in force.
+            within_reach = self._link_within_reach(distance)
             available = (
-                distance <= self._communication_range
+                within_reach
                 and source_agent_id not in blocked
                 and destination_agent_id not in blocked
                 and (source_agent_id, destination_agent_id) not in blocked_link_keys
@@ -404,4 +595,5 @@ __all__ = [
     "CommunicationLink",
     "CommunicationState",
     "CommunicationUpdate",
+    "RadioModel",
 ]

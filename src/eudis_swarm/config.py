@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
+from .communication import RadioModel
 from .validation import (
     validate_nonnegative_real,
     validate_positive_integer,
@@ -32,6 +33,9 @@ class SimulationConfig:
     failure_time: float = 4.0
     max_simulation_time: float = 300.0
     communication_range: float = 130.0
+    link_model: str = "range"
+    stochastic_delivery: bool = False
+    radio_model: RadioModel = field(default_factory=RadioModel)
     comm_fault_agent_id: int | None = None
     comm_fault_start: float = 4.0
     comm_fault_end: float = 8.0
@@ -48,6 +52,14 @@ class SimulationConfig:
             )
         if self.allocation_policy not in {"distance", "connectivity"}:
             raise ValueError("allocation_policy must be 'distance' or 'connectivity'")
+        if self.link_model not in {"range", "radio"}:
+            raise ValueError("link_model must be 'range' or 'radio'")
+        if not isinstance(self.stochastic_delivery, bool):
+            raise ValueError("stochastic_delivery must be a boolean")
+        if not isinstance(self.radio_model, RadioModel):
+            raise ValueError("radio_model must be a RadioModel instance")
+        if self.stochastic_delivery and self.link_model != "radio":
+            raise ValueError("stochastic_delivery requires link_model='radio'")
 
         positive_floats = {
             "area_width": self.area_width,

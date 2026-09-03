@@ -9,6 +9,16 @@ and interfaces change between prototypes.
 
 ### Added
 
+- `RadioModel`: a frozen free-space line-of-sight link model implementing the
+  path-loss, SNR and BPSK bit-error-rate relations of Hu, Ren & Cheng
+  (arXiv:2407.11531, eqs. 5-10), with `can_link()` for the hard
+  `BER <= P_e0` rule and `link_quality()` for a per-frame delivery probability.
+- `SimulationConfig.link_model` (`range` default, or `radio`),
+  `SimulationConfig.stochastic_delivery`, and `SimulationConfig.radio_model`,
+  with matching `--link-model` and `--stochastic-delivery` CLI flags. Under
+  `radio` the `CommunicationGraph` ignores `communication_range` and derives
+  links from the model; with stochastic delivery each link is sampled from its
+  quality using a seeded stream, so one seed reproduces byte-identical traces.
 - Explicit "all rights reserved" copyright notice and a "not flight software"
   statement in the README. The repository carries no open-source licence and is
   published for review only.
