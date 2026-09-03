@@ -26,6 +26,7 @@ and interfaces change between prototypes.
   agreement and the architectural boundaries that must be preserved.
 - `--version` flag on the `eudis-swarm` CLI.
 - Packaging metadata: project URLs, classifiers and keywords.
+- Issue forms, a pull-request template, and badges.
 - `PeerStatus` with the receiver-local `HEARD`, `SILENT` and quorum-backed
   `DECLARED_FAILED` meanings, while retaining `PeerKnowledgeState` for snapshot
   freshness.
