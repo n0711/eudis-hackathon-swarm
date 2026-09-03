@@ -23,12 +23,13 @@ from .task import TaskOwnershipState
 from .task_claims import TaskClaimStore
 
 if TYPE_CHECKING:
+    from .autonomy import LocalAutonomyKernel, TransitionRecord
     from .communication import CommunicationGraph
     from .config import SimulationConfig
     from .mission import Mission
 
 
-TRACE_SCHEMA_VERSION = 2
+TRACE_SCHEMA_VERSION = 3
 
 
 @dataclass(frozen=True, slots=True)
@@ -73,6 +74,19 @@ class TracePeerKnowledge:
 
 
 @dataclass(frozen=True, slots=True)
+class TraceContactState:
+    """One receiver's local communication-inference machine state."""
+
+    peer_agent_id: int
+    state: str
+    last_rx_at: float | None
+    previous_rx_at: float | None
+    consecutive_expected_misses: int
+    successful_rx_count: int
+    recovery_count: int
+
+
+@dataclass(frozen=True, slots=True)
 class TraceAgentState:
     agent_id: int
     physical_state: str
@@ -86,6 +100,26 @@ class TraceAgentState:
     stale_peer_count: int
     unknown_peer_count: int
     peer_knowledge: tuple[TracePeerKnowledge, ...]
+    coordination_mode: str
+    contact_states: tuple[TraceContactState, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class TraceTransition:
+    """Serializable observer copy of an accepted finite control-state change."""
+
+    timestamp: float
+    observer_agent_id: int
+    sequence: int
+    machine: str
+    previous_state: str
+    event: str
+    next_state: str
+    guard: str
+    reason: str
+    effects: tuple[str, ...]
+    peer_agent_id: int | None = None
+    task_id: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -156,6 +190,7 @@ class TraceFrame:
     disputed_task_ids: tuple[int, ...]
     metrics: TraceMetrics
     events: tuple[TraceEvent, ...]
+    transitions: tuple[TraceTransition, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -226,6 +261,10 @@ def _frame_from_dict(data: Mapping[str, Any]) -> TraceFrame:
                     "position": _position(agent_data["position"]),
                     "neighbor_ids": tuple(agent_data["neighbor_ids"]),
                     "peer_knowledge": peer_knowledge,
+                    "contact_states": tuple(
+                        TraceContactState(**contact)
+                        for contact in agent_data["contact_states"]
+                    ),
                 }
             )
         )
@@ -243,6 +282,10 @@ def _frame_from_dict(data: Mapping[str, Any]) -> TraceFrame:
         disputed_task_ids=tuple(data["disputed_task_ids"]),
         metrics=TraceMetrics(**data["metrics"]),
         events=tuple(TraceEvent(**item) for item in data["events"]),
+        transitions=tuple(
+            TraceTransition(**{**item, "effects": tuple(item["effects"])})
+            for item in data["transitions"]
+        ),
     )
 
 
@@ -255,6 +298,7 @@ class TraceRecorder:
         self._mission_event_count = 0
         self._communication_event_count = 0
         self._peer_event_count = 0
+        self._transition_counts: dict[int, int] = {}
 
     def capture(
         self,
@@ -266,13 +310,22 @@ class TraceRecorder:
         timestamp: float,
         positions: Mapping[int, Position] | None = None,
         claim_stores: Mapping[int, TaskClaimStore] | None = None,
+        autonomy_kernels: Mapping[int, LocalAutonomyKernel] | None = None,
     ) -> None:
         new_events = self._collect_events(mission, communication_events, peer_events)
         agents = tuple(
-            self._agent_state(agent.agent_id, mission, graph, peer_stores, positions)
+            self._agent_state(
+                agent.agent_id,
+                mission,
+                graph,
+                peer_stores,
+                positions,
+                autonomy_kernels,
+            )
             for agent in mission.ordered_agents
         )
         ownership, disputed_task_ids = _ownership_views(claim_stores, timestamp)
+        transitions = self._collect_transitions(autonomy_kernels)
         frame = TraceFrame(
             timestamp=timestamp,
             agents=agents,
@@ -346,10 +399,16 @@ class TraceRecorder:
                 ),
             ),
             events=new_events,
+            transitions=transitions,
         )
         if self._frames and self._frames[-1].timestamp == timestamp:
             previous_events = self._frames[-1].events
-            self._frames[-1] = replace(frame, events=previous_events + frame.events)
+            previous_transitions = self._frames[-1].transitions
+            self._frames[-1] = replace(
+                frame,
+                events=previous_events + frame.events,
+                transitions=previous_transitions + frame.transitions,
+            )
         else:
             self._frames.append(frame)
 
@@ -377,6 +436,7 @@ class TraceRecorder:
         graph: CommunicationGraph,
         peer_stores: Mapping[int, PeerStateStore],
         positions: Mapping[int, Position] | None,
+        autonomy_kernels: Mapping[int, LocalAutonomyKernel] | None,
     ) -> TraceAgentState:
         agent = mission.agents[agent_id]
         store = peer_stores[agent_id]
@@ -387,6 +447,15 @@ class TraceRecorder:
             state: sum(item.state == state.value for item in knowledge)
             for state in PeerKnowledgeState
         }
+        kernel = None if autonomy_kernels is None else autonomy_kernels[agent_id]
+        contact_states = (
+            ()
+            if kernel is None
+            else tuple(
+                self._contact_state(kernel, peer_id)
+                for peer_id in kernel.peer_agent_ids
+            )
+        )
         return TraceAgentState(
             agent_id=agent_id,
             physical_state=(
@@ -402,6 +471,61 @@ class TraceRecorder:
             stale_peer_count=counts[PeerKnowledgeState.STALE],
             unknown_peer_count=counts[PeerKnowledgeState.UNKNOWN],
             peer_knowledge=knowledge,
+            coordination_mode=(
+                "UNAVAILABLE" if kernel is None else kernel.coordination_mode.value
+            ),
+            contact_states=contact_states,
+        )
+
+    @staticmethod
+    def _contact_state(kernel: LocalAutonomyKernel, peer_id: int) -> TraceContactState:
+        configuration = kernel.contact_configuration_for(peer_id)
+        variables = configuration.variables
+        return TraceContactState(
+            peer_agent_id=peer_id,
+            state=configuration.state.value,
+            last_rx_at=variables.last_rx_at,
+            previous_rx_at=variables.previous_rx_at,
+            consecutive_expected_misses=variables.consecutive_expected_misses,
+            successful_rx_count=variables.successful_rx_count,
+            recovery_count=variables.recovery_count,
+        )
+
+    def _collect_transitions(
+        self,
+        autonomy_kernels: Mapping[int, LocalAutonomyKernel] | None,
+    ) -> tuple[TraceTransition, ...]:
+        if autonomy_kernels is None:
+            return ()
+        records: list[TransitionRecord] = []
+        for observer_agent_id, kernel in sorted(autonomy_kernels.items()):
+            start = self._transition_counts.get(observer_agent_id, 0)
+            kernel_records = kernel.transition_records
+            records.extend(kernel_records[start:])
+            self._transition_counts[observer_agent_id] = len(kernel_records)
+        return tuple(
+            TraceTransition(
+                timestamp=record.timestamp,
+                observer_agent_id=record.observer_agent_id,
+                sequence=record.sequence,
+                machine=record.machine.value,
+                previous_state=record.previous_state,
+                event=record.event,
+                next_state=record.next_state,
+                guard=record.guard,
+                reason=record.reason,
+                effects=record.effects,
+                peer_agent_id=record.peer_agent_id,
+                task_id=record.task_id,
+            )
+            for record in sorted(
+                records,
+                key=lambda item: (
+                    item.timestamp,
+                    item.observer_agent_id,
+                    item.sequence,
+                ),
+            )
         )
 
     @staticmethod
@@ -582,6 +706,7 @@ __all__ = [
     "SimulationTrace",
     "TRACE_SCHEMA_VERSION",
     "TraceAgentState",
+    "TraceContactState",
     "TraceEvent",
     "TraceFrame",
     "TraceLink",
@@ -590,4 +715,5 @@ __all__ = [
     "TracePeerKnowledge",
     "TraceRecorder",
     "TraceTaskState",
+    "TraceTransition",
 ]

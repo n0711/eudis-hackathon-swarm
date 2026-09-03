@@ -805,6 +805,46 @@ suppressions, and 53 new inactive-endpoint deferrals. Task 19 is activated by it
 replacement at `t = 10.75 s`, after local lease expiry. Zero forwarded deliveries
 is expected for this full-clique default; chain tests remain the multi-hop proof.
 
+## Formal receiver-local autonomy layer
+
+The next layer is now implemented in `eudis_swarm.autonomy` without replacing
+the stores described above. Each UAV owns a `LocalAutonomyKernel` composed from:
+
+- one five-state `ContactEFSM` per peer, driven by successful local receipts and
+  receiver-local elapsed time;
+- one executable `PeerAvailabilityEFSM` mapping per peer that preserves
+  `HEARD`, `SILENT`, and `DECLARED_FAILED` semantics;
+- one six-state `TaskOwnershipEFSM` conformance view per task over the existing
+  `TaskClaimStore` ledger; and
+- one `CoordinationModeEFSM` per UAV with `COOPERATIVE`, `DEGRADED`,
+  `LOCAL_AUTONOMY`, and `RECONCILING` states.
+
+The pure transition signature is conceptually:
+
+```text
+delta(control state, typed extended variables, typed local event)
+    -> (next state, next variables, requested effects, guard, reason)
+```
+
+Requested effects are data. Reducers do not move vehicles, send packets, change
+network truth, mutate another replica, or read observer state. No dispatcher
+consumes these requests yet; the simulation's existing claim orchestration
+continues its established actions independently. Coordination mode is advisory,
+and task execution authority remains `TaskClaimStore.owns_task()`.
+
+The contact machine is deliberately distinct from the physical radio model. A
+graph link restoration, component change, distance, SNR, BER, jammer boundary,
+or failed attempt is not a local contact event. Successful protocol receipts are
+attributed to their immediate physical forwarder, never to an immutable
+message's logical origin. Recovery requires receipts at distinct receiver-local
+times, preventing one same-timestamp message burst from creating false
+stability.
+
+Trace schema 3 records ordered control-state changes and current per-UAV contact
+and coordination state. These records remain observer-only. Canonical tables,
+the exact guards/effects, bounded model checks, and integration limitations are
+in [the autonomy EFSM reference](autonomy_efsm.md).
+
 ## Deliberately deferred
 
 This milestone implements a small receiver-local intent and execution controller,
@@ -821,6 +861,9 @@ SNR/BER link equation and seeded packet sampling remain simplified abstractions;
 terrain, interference, measured channel calibration, and realistic RF are not
 implemented.
 
-The exact next milestone is to extend and validate that optional
-SNR-to-packet-delivery abstraction, then run controlled packet-loss, partition,
-renewal, and lease-timeout experiments against the centralized baselines.
+The exact next milestone is a versioned Mission Contract plus a composed Mission
+EFSM above the current distributed runtime. It should express operator intent,
+constraints, priorities, degradation policy, and explicit mission phases without
+turning centralized planning into runtime task authority. Coordinated search,
+dynamic role/connectivity support, physical topology repair, handoff, safety,
+experiments, quantum-assisted initial planning, and SITL remain later milestones.

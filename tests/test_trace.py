@@ -195,7 +195,7 @@ def test_trace_frame_carries_world_truth_belief_and_ownership_together() -> None
         .trace
     )
     assert trace is not None
-    assert trace.schema_version == 2
+    assert trace.schema_version == 3
 
     disputed_frames = [frame for frame in trace.frames if frame.disputed_task_ids]
     assert disputed_frames, "the split brain never appeared in the trace"
@@ -213,6 +213,55 @@ def test_trace_frame_carries_world_truth_belief_and_ownership_together() -> None
 
     # and the disagreement resolves by the end of the mission.
     assert trace.frames[-1].disputed_task_ids == ()
+
+
+def test_trace_carries_composed_autonomy_state_and_ordered_transitions() -> None:
+    trace = run_simulation(
+        SimulationConfig(
+            failure_time=100.0,
+            communication_range=130.0,
+            comm_fault_agent_id=2,
+            comm_fault_start=4.0,
+            comm_fault_end=8.0,
+        ),
+        capture_trace=True,
+    ).trace
+    assert trace is not None
+
+    every_transition = [
+        transition for frame in trace.frames for transition in frame.transitions
+    ]
+    assert every_transition
+    assert {transition.machine for transition in every_transition} >= {
+        "ContactEFSM",
+        "PeerAvailabilityEFSM",
+        "TaskOwnershipEFSM",
+        "CoordinationModeEFSM",
+    }
+    assert all(
+        transition.guard and transition.reason for transition in every_transition
+    )
+    for observer_agent_id in range(1, 5):
+        sequence = [
+            transition.sequence
+            for transition in every_transition
+            if transition.observer_agent_id == observer_agent_id
+        ]
+        assert sequence == list(range(len(sequence)))
+
+    local_autonomy = next(
+        transition
+        for transition in every_transition
+        if transition.machine == "CoordinationModeEFSM"
+        and transition.observer_agent_id == 2
+        and transition.next_state == "LOCAL_AUTONOMY"
+    )
+    assert local_autonomy.effects == ("ENTER_LOCAL_AUTONOMY",)
+    frame = next(item for item in trace.frames if item.timestamp == 7.5)
+    modes = {agent.agent_id: agent.coordination_mode for agent in frame.agents}
+    assert modes[2] == "LOCAL_AUTONOMY"
+    assert len(set(modes.values())) > 1
+    assert all(len(agent.contact_states) == 3 for agent in frame.agents)
 
 
 def test_ownership_survives_a_json_round_trip(tmp_path: Path) -> None:

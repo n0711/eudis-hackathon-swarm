@@ -1,7 +1,7 @@
 """Orchestrate deterministic world physics, network delivery, and local evidence.
 
-World truth advances the simulation while agent decisions receive only self-state
-and messages or link evidence that the modeled network actually delivered.
+World truth advances the simulation while agent decisions receive only self-state,
+receiver-local time, and evidence the modeled network actually delivered.
 """
 
 from __future__ import annotations
@@ -15,6 +15,11 @@ from typing import Mapping, Sequence
 
 from . import __version__
 from .agent import Agent, AgentStatus, Heartbeat, Position
+from .autonomy import (
+    ContactPolicy,
+    CoordinationPolicy,
+    LocalAutonomyKernel,
+)
 from .communication import CommunicationGraph, CommunicationUpdate, RegionJammer
 from .config import SimulationConfig
 from .failure_manager import FailureDeclaration, FailureManager
@@ -59,6 +64,7 @@ class SimulationResult:
     peer_state_stores: dict[int, PeerStateStore] | None = None
     peer_state_events: tuple[PeerStateEvent, ...] = ()
     task_claim_stores: dict[int, TaskClaimStore] | None = None
+    autonomy_kernels: dict[int, LocalAutonomyKernel] | None = None
     trace: SimulationTrace | None = None
 
 
@@ -170,6 +176,32 @@ class Simulation:
             )
             for owner_agent_id in sorted(selected_agent_ids)
         }
+        contact_degraded_after = max(
+            config.heartbeat_interval,
+            config.peer_state_stale_after,
+        )
+        self.autonomy_kernels = {
+            owner_agent_id: LocalAutonomyKernel(
+                owner_agent_id,
+                (
+                    peer_agent_id
+                    for peer_agent_id in selected_agent_ids
+                    if peer_agent_id != owner_agent_id
+                ),
+                (task.task_id for task in selected_tasks),
+                contact_policy=ContactPolicy(
+                    expected_interval=config.heartbeat_interval,
+                    degraded_after=contact_degraded_after,
+                    lost_after=(contact_degraded_after + config.peer_state_stale_after),
+                ),
+                coordination_policy=CoordinationPolicy(
+                    degradation_grace=config.heartbeat_interval,
+                    local_autonomy_grace=config.heartbeat_interval,
+                    recovery_stable_for=config.heartbeat_interval,
+                ),
+            )
+            for owner_agent_id in sorted(selected_agent_ids)
+        }
         self.task_claim_transport = TaskClaimTransport(
             self.communication_graph, self.task_claim_stores
         )
@@ -247,6 +279,7 @@ class Simulation:
             timestamp,
             positions,
             self.task_claim_stores,
+            self.autonomy_kernels,
         )
 
     def _record_positions(
@@ -387,6 +420,7 @@ class Simulation:
             # failed software cannot advance its private clock or local beliefs.
             if observer_agent_id not in participating_agent_ids:
                 continue
+            self.autonomy_kernels[observer_agent_id].advance_time(timestamp)
             for peer_agent_id in store.advance_time(timestamp):
                 stale_transitions += 1
                 self._peer_state_event(
@@ -441,6 +475,11 @@ class Simulation:
                 refresh_transitions=len(batch.refreshed_observations),
                 simultaneous_stale=self._stale_observation_count(),
             )
+        for observer_agent_id, peer_agent_id in batch.delivered_observations:
+            self.autonomy_kernels[observer_agent_id].receive_peer_evidence(
+                peer_agent_id,
+                timestamp,
+            )
         LOGGER.debug(
             "[PEER] State batch at t=%.2fs: %d/%d delivered",
             timestamp,
@@ -456,12 +495,42 @@ class Simulation:
             agent.agent_id for agent in self.mission.ordered_agents if agent.responsive
         )
 
+    def _synchronize_local_autonomy(
+        self,
+        timestamp: float,
+        participating_agent_ids: tuple[int, ...] | None = None,
+    ) -> None:
+        """Compose receiver-local stores without exposing graph or world truth."""
+
+        participants = (
+            self._participating_agent_ids()
+            if participating_agent_ids is None
+            else participating_agent_ids
+        )
+        for observer_agent_id in participants:
+            kernel = self.autonomy_kernels[observer_agent_id]
+            peer_store = self.peer_state_stores[observer_agent_id]
+            for peer_agent_id in peer_store.peer_agent_ids:
+                kernel.synchronize_peer_status(
+                    peer_agent_id,
+                    peer_store.status_for(peer_agent_id),
+                    timestamp,
+                )
+            task_store = self.task_claim_stores[observer_agent_id]
+            for task_id in task_store.task_ids:
+                kernel.observe_task_view(
+                    task_store.view(task_id, timestamp),
+                    timestamp,
+                )
+        for observer_agent_id in participants:
+            self.autonomy_kernels[observer_agent_id].evaluate_coordination(timestamp)
+
     def _record_protocol_delivery(
         self,
         timestamp: float,
         batch: ProtocolDeliveryBatch | TaskProtocolDeliveryBatch,
     ) -> None:
-        """Expose gossip activity to observer metrics, never decision state."""
+        """Record observer counters and expose only successful hops to receivers."""
 
         self.mission.metrics.record_protocol_message_batch(
             timestamp,
@@ -475,6 +544,13 @@ class Simulation:
             duplicate_route_suppressions=batch.duplicate_route_suppressions,
             inactive_endpoint_deferrals=batch.inactive_endpoint_deferrals,
         )
+        for receipt in batch.receipts:
+            if receipt.forwarder_agent_id == receipt.receiver_agent_id:
+                continue
+            self.autonomy_kernels[receipt.receiver_agent_id].receive_forwarded_evidence(
+                receipt.forwarder_agent_id,
+                timestamp,
+            )
 
     def _local_communication_costs(self, agent_id: int) -> dict[int, float]:
         """Derive optional task costs from this receiver's delivered peer copies."""
@@ -596,6 +672,9 @@ class Simulation:
         participants: tuple[int, ...],
     ) -> int:
         local_conflict_losses: set[tuple[int, int]] = set()
+        # Capture the receiver-local contest boundary before deterministic
+        # reconciliation removes it at the same simulator timestamp.
+        self._synchronize_local_autonomy(timestamp, participants)
         for agent_id in participants:
             store = self.task_claim_stores[agent_id]
             store.advance_time(timestamp)
@@ -706,6 +785,7 @@ class Simulation:
                 break
         else:
             raise RuntimeError("local task-claim rounds did not reach a fixed point")
+        self._synchronize_local_autonomy(timestamp, participants)
 
     def _exchange_failure_evidence(
         self, timestamp: float
@@ -1061,6 +1141,7 @@ class Simulation:
             # introduce extra task completion, allocation, or failure checks.
             if not mission_boundary:
                 self._record_positions(timestamp, communication_positions)
+                self._synchronize_local_autonomy(timestamp)
                 self.mission.assert_consistent()
                 self._capture_trace_frame(timestamp, communication_positions)
                 continue
@@ -1113,6 +1194,7 @@ class Simulation:
             peer_state_stores=dict(self.peer_state_stores),
             peer_state_events=tuple(self.peer_state_events),
             task_claim_stores=dict(self.task_claim_stores),
+            autonomy_kernels=dict(self.autonomy_kernels),
             trace=trace,
         )
         LOGGER.info("\n%s", result.metrics.format_summary())

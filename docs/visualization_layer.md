@@ -20,7 +20,8 @@ local Streamlit dashboard with coordinated Plotly panels
 ```
 
 Trace capture is opt-in, so ordinary headless runs retain their previous runtime
-and memory behavior. Each immutable frame contains:
+and memory behavior. Schema version 3 adds composed autonomy state and ordered
+transition records. Each immutable frame contains:
 
 - simulation time;
 - physical/observer UAV state, positions, cached task intents, and direct
@@ -29,10 +30,14 @@ and memory behavior. Each immutable frame contains:
 - active canonical communication links and connected components;
 - receiver-local `UNKNOWN` / `FRESH` / `STALE` peer knowledge, including clearly
   labelled last-known snapshots;
+- receiver-local Contact EFSM state and variables plus each UAV's independent
+  coordination mode;
 - cumulative mission, topology, freshness, one-hop heartbeat delivery, and
   classified protocol-gossip first-delivery, forwarding, duplicate, and
   inactive-endpoint-deferral metrics;
-- structured mission, allocation, recovery, communication, and peer events.
+- structured mission, allocation, recovery, communication, and peer events;
+- ordered autonomy transitions with machine, previous/event/next state,
+  guard/reason, and requested effects.
 
 Allocation events reuse the recorded local-utility decision metadata.
 Connectivity decisions therefore expose travel distance, predicted peer degree,
@@ -76,12 +81,15 @@ predicted peer degree 1, and predicted isolation `NO`.
   and allocation state.
 - The mission map distinguishes trajectories, dashed active links, task states,
   failed UAVs, healthy isolated UAVs, and network components.
-- The UAV table separates physical state from peer-knowledge counts.
+- The UAV table separates physical state, coordination mode, and peer-knowledge
+  counts.
 - The topology graph ignores mission geometry so partitions remain obvious.
 - The decision panel explains the most relevant event at the current time.
-- The selected-UAV table displays only receiver-local last-known peer snapshots.
+- The selected-UAV table displays only receiver-local last-known peer snapshots
+  together with contact state, evidence age, misses, and recovery count.
 - Playback supports play, pause, speed, frame steps, event jumps, and a slider.
-- The timeline and filterable event log use structured trace events.
+- The timeline and filterable log combine structured trace events with ordered
+  EFSM transition records under a distinct `AUTONOMY` category.
 
 The legacy `--visualize` matplotlib final-frame view remains available as a
 static debugging aid; it is not the preferred mission playback interface.

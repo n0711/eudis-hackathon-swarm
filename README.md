@@ -7,7 +7,9 @@ own local knowledge, and conflicting task ownership is reconciled autonomously
 once connectivity returns. The normal mission now turns receiver-local utility
 into claims; only a locally owned claim authorizes motion, renewal, or completion.
 The centralized allocators remain comparison baselines, not the operational
-controller.
+controller. Each UAV now also exposes a composed, receiver-local EFSM kernel for
+contact inference, peer availability, task-ownership conformance, and epistemic
+coordination mode, with pure transition results and observer-only traces.
 
 Every result below is reproducible from a fixed command line. There is no
 wall-clock time, no unseeded randomness, and no order-dependent iteration in the
@@ -72,12 +74,18 @@ Mission / Simulation World
         |    +-- ReceiverLocalTaskUtility
         |    +-- PeerStateStore     (delivered heartbeats, freshness, declarations)
         |    +-- TaskClaimStore     (immutable claims, leases, epochs, reconciliation)
+        |    +-- LocalAutonomyKernel
+        |    |     +-- ContactEFSM             (one per peer)
+        |    |     +-- PeerAvailabilityEFSM    (one per peer)
+        |    |     +-- TaskOwnershipEFSM       (one per task)
+        |    |     +-- CoordinationModeEFSM    (one per UAV)
         |    +-- current_task       (local intent cache; not ownership authority)
         |
         +-- Agent 2
         |    +-- immutable task catalogue + local utility
         |    +-- PeerStateStore
         |    +-- TaskClaimStore
+        |    +-- LocalAutonomyKernel
         |
         +-- Agent N
              +-- same receiver-local components
@@ -285,9 +293,55 @@ The simulation still runs all replicas in one deterministic process, but that
 orchestrator is a physics/test harness: it batches independent local choices and
 does not supply global task ownership or graph reachability to those choices.
 
+### Milestone 4 — Formal Receiver-local Autonomy EFSMs
+
+Modules: [`autonomy.py`](src/eudis_swarm/autonomy.py),
+[`trace.py`](src/eudis_swarm/trace.py), and the generated
+[`autonomy_efsm.md`](docs/autonomy_efsm.md) reference.
+
+- **Pure transition relation.** Each transition has finite control state, frozen
+  typed extended variables, a typed event, an explicit guard/reason, and ordered
+  requested effects. Calling a reducer never moves an aircraft, changes network
+  truth, sends a packet, mutates a peer, or executes an effect.
+- **Orthogonal machines.** Every UAV composes one `ContactEFSM` and one preserved
+  `PeerAvailabilityEFSM` mapping per peer, one `TaskOwnershipEFSM` conformance
+  view per task, and one `CoordinationModeEFSM`. There is no global cross-product
+  or requirement that different UAVs occupy the same mode.
+- **Receiver-local contact inference.** `UNKNOWN`, `ACTIVE`, `DEGRADED`, `LOST`,
+  and `RECOVERING` are derived from successful local receipts and elapsed local
+  time. Recovery requires observations at distinct local times. A physical link
+  restoration, simulator SNR value, component change, or failed delivery is not
+  a contact event.
+- **Epistemic coordination posture.** Each UAV independently moves among
+  `COOPERATIVE`, `DEGRADED`, `LOCAL_AUTONOMY`, and `RECONCILING` from its composed
+  local contact states and locally visible task contests. The mode is advisory
+  in this milestone; it does not override the existing claim authority.
+- **Effects are requests.** Values such as `ENTER_LOCAL_AUTONOMY`,
+  `REQUEST_RECONCILIATION`, `STAND_DOWN_TASK`, and `RESUME_COOPERATION` are data
+  returned by transitions and recorded for inspection. No dispatcher consumes
+  them yet; existing claim orchestration continues its already-established
+  reconciliation and stand-down actions independently.
+- **Structured observability.** Trace schema 3 records per-peer contact variables,
+  per-UAV coordination mode, and ordered state changes with timestamp, local
+  sequence, previous state, event, next state, guard, reason, and effects. The
+  dashboard displays these observer-only records without feeding them back into
+  control.
+- **Bounded checking.** Tests enumerate bounded event sequences, replay reducers,
+  reach every control state, enforce terminal completion, and inspect the
+  autonomy module for forbidden world/observer dependencies. Existing multi-hop,
+  split-brain, radio, jammer, and distributed-execution tests remain intact.
+
+The physical `RadioModel` still generates world-level delivery outcomes. The
+`ContactEFSM` interprets only the evidence a receiving process obtains from
+those outcomes; it never receives distance, SNR, BER, jammer state, or graph
+reachability.
+
 ## Task Ownership EFSM
 
-`TaskOwnershipState` has exactly six states:
+`TaskClaimStore` remains the operational evidence ledger and `owns_task()`
+remains authorization. The formal task machine is a conformance projection of
+that receiver-local ledger view; it does not duplicate claim validation,
+expiry, or reconciliation. `TaskOwnershipState` has exactly six states:
 
 | State | Meaning at this receiver |
 | --- | --- |
@@ -421,8 +475,8 @@ intentionally not pinned here; the configured branch-coverage floor is 85%.
 | Tests + coverage | `python -m pytest --cov=eudis_swarm --cov-report=term-missing` | pass at or above 85% |
 | Package build | `python -m build` | build `sdist` + `wheel` |
 
-Current milestone result: **290 tests passed**, total branch-aware coverage is
-**88.57%**, Pyright reports zero errors, Ruff lint/format checks pass, both
+Current milestone result: **322 tests passed**, total branch-aware coverage is
+**89.14%**, Pyright reports zero errors, Ruff lint/format checks pass, both
 deterministic demos pass, and the source and wheel distributions build cleanly.
 
 The GitHub Actions workflow runs the same lint, format, type, test/coverage, and
@@ -440,13 +494,14 @@ eudis-swarm/
 │   ├── failure_manager.py      # isolated detector replicas, FailureVote / FailureDeclaration, quorum
 │   ├── task_claims.py          # per-UAV TaskClaimStore: immutable claims, leases, epochs, reconciliation
 │   ├── task_utility.py         # immutable objectives + receiver-local additive claim-intent utility
+│   ├── autonomy.py             # pure Contact/Peer/Task/Coordination EFSMs + local composition kernel
 │   ├── task.py                 # observer Task projection + six-state TaskOwnershipState vocabulary
 │   ├── task_allocator.py       # centralized distance/connectivity comparison baselines
 │   ├── mission.py              # claim-authorized execution, observer projection, lifecycle, invariants
 │   ├── simulation.py           # local claim rounds, logical clock, physics, orchestration, CLI
 │   ├── simulation_events.py    # structured comms / peer-knowledge / task-claim event types
 │   ├── metrics.py              # separate physical-mission and network metric blocks
-│   ├── trace.py                # versioned JSON playback frames for the dashboard
+│   ├── trace.py                # schema-v3 world/belief/ownership/EFSM playback frames
 │   ├── task_claim_trace.py     # observer-only agent-by-task ownership trace (no authoritative fields)
 │   ├── task_claim_demo.py      # deterministic 2+2 split-brain / reconcile / continue demo + CLI
 │   ├── agent.py                # world-truth UAV state, 2D point-mass motion, immutable heartbeats
@@ -460,6 +515,8 @@ eudis-swarm/
 │   └── ...
 ├── docs/
 │   ├── distributed_state_foundation.md   # state boundary, EFSM, quorum, leases, reconciliation
+│   ├── autonomy_efsm.md                   # generated transition tables + composition/locality rules
+│   ├── prior_art.md                       # evidence-bounded research/industrial comparison
 │   ├── prototype_0_1.md … prototype_0_3a.md
 │   ├── visualization_layer.md
 │   └── code_quality_and_performance.md
@@ -474,6 +531,7 @@ Key areas:
 | --- | --- |
 | Distributed peer state & failure detection | `peer_state.py`, `failure_manager.py` |
 | Distributed task intent, ownership, and execution | `task_utility.py`, `task_claims.py`, `mission.py` |
+| Receiver-local discrete autonomy | `autonomy.py` |
 | Communication topology | `communication.py` |
 | Messaging / transport | `messaging.py` |
 | Simulations & demos | `simulation.py`, `task_claim_demo.py` |
@@ -544,20 +602,30 @@ eudis-swarm-dashboard trace.json
 
 Planned work — **not yet implemented**:
 
-1. **Probabilistic SNR-to-packet delivery experiments** — extend and validate the
-   existing optional free-space link abstraction, then sweep packet delivery,
-   partition duration, renewal pacing, and lease timeout with quantified
-   resilient-vs-baseline outcomes. It must not be described as calibrated RF
-   until measurements support that claim.
-2. **Coordinated search and target hand-off** between UAVs.
-3. **Deconfliction** — spatial / task deconfliction between agents.
-4. **ArduPilot SITL** integration for a software-in-the-loop swarm.
-5. **Orounda-georeferenced simulation** — scenarios on the real airfield geometry.
-6. **Tactical / 3D visualisation** of local beliefs and task ownership.
-7. **Quantum-simulated reconciliation / allocation benchmark** — a QUBO-style
-   comparison against the deterministic mechanism.
-8. **Mixed SITL + physical UAV operation.**
-9. **Larger-swarm scaling** beyond the current small deterministic scenarios.
+1. **Mission Contract + Mission EFSM** — versioned operator intent, constraints,
+   priorities, degradation policy, and explicit mission phases above local
+   distributed execution. This is the exact recommended next milestone.
+2. **Coordinated search** — a deterministic execution baseline followed by a
+   separately evaluated distributed receding-horizon approach. Ownership answers
+   who may act; search planning answers how an owned objective is executed.
+3. **Role EFSM + connectivity support** — evidence- and utility-driven role
+   changes, never the shortcut “poor link implies relay.”
+4. **Cyber-physical topology repair and handoff** — close the
+   network→knowledge→decision→movement loop, then add an explicit non-weapon
+   track/observation handoff protocol.
+5. **Independent local safety/deconfliction supervisor** — spatial separation
+   that never waits for distributed consensus.
+6. **Controlled experiments and RF validation** — sweep delivery loss, jammer
+   duration, topology, lease policy, clocks, and message load against centralized
+   and distributed baselines. The analytical radio abstraction must not be
+   described as calibrated RF until measurements support that claim.
+7. **Quantum-simulated initial planning benchmark** — QUBO/QAOA candidate plans
+   compared with greedy, heuristic, and exact classical methods where feasible;
+   never runtime ownership authority.
+8. **ArduPilot SITL and vehicle adapters**, followed only later by Orounda
+   georeferencing and controlled mixed SITL/physical-UAV validation.
+9. **Larger-swarm scaling and tactical/3-D visualization** after the protocol,
+   mission, search, role, and safety boundaries are stable.
 
 ## EUDIS Demonstration Direction
 

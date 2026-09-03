@@ -18,6 +18,7 @@ from eudis_swarm.trace import (
     TraceAgentState,
     TraceEvent,
     TraceFrame,
+    TraceTransition,
 )
 
 COMPONENT_COLORS = ("#2F6FED", "#E58E26", "#2A9D8F", "#8E5BB7", "#64748B")
@@ -27,9 +28,12 @@ CATEGORY_COLORS = {
     "TASK": "#2A9D8F",
     "NETWORK": "#E58E26",
     "PEER": "#64748B",
+    "AUTONOMY": "#0F766E",
     "FAILURE": "#C44536",
     "RECOVERY": "#A16207",
 }
+
+TraceActivity = TraceEvent | TraceTransition
 
 
 def _initial_trace_path() -> Path:
@@ -51,6 +55,36 @@ def _read_trace_bytes(payload: bytes) -> SimulationTrace:
 
 def _all_events(trace: SimulationTrace) -> tuple[TraceEvent, ...]:
     return tuple(event for frame in trace.frames for event in frame.events)
+
+
+def _all_transitions(trace: SimulationTrace) -> tuple[TraceTransition, ...]:
+    return tuple(
+        transition for frame in trace.frames for transition in frame.transitions
+    )
+
+
+def _activity_category(activity: TraceActivity) -> str:
+    return "AUTONOMY" if isinstance(activity, TraceTransition) else activity.category
+
+
+def _activity_message(activity: TraceActivity) -> str:
+    if isinstance(activity, TraceEvent):
+        return activity.message
+    return (
+        f"UAV {activity.observer_agent_id} · {activity.machine}: "
+        f"{activity.previous_state} → {activity.next_state} · {activity.event}"
+    )
+
+
+def _activity_sort_key(activity: TraceActivity) -> tuple[float, int, int, int]:
+    if isinstance(activity, TraceTransition):
+        return (
+            activity.timestamp,
+            1,
+            activity.observer_agent_id,
+            activity.sequence,
+        )
+    return (activity.timestamp, 0, activity.agent_id or 0, 0)
 
 
 def _agent(frame: TraceFrame, agent_id: int) -> TraceAgentState:
@@ -175,6 +209,7 @@ def _mission_figure(
                 hovertext=[
                     f"UAV {agent.agent_id}<br>Physical: {agent.physical_state}<br>"
                     f"Coordinator: {agent.coordinator_state}<br>"
+                    f"Coordination: {agent.coordination_mode}<br>"
                     f"Task: {'—' if agent.current_task is None else agent.current_task}<br>"
                     f"Position: {agent.position[0]:.1f}, {agent.position[1]:.1f}<br>"
                     f"Neighbors: {len(agent.neighbor_ids)}"
@@ -275,7 +310,9 @@ def _network_figure(frame: TraceFrame) -> go.Figure:
                 text=[f"UAV {agent.agent_id}<br>{detail}"],
                 textposition="bottom center",
                 hovertext=[
-                    f"UAV {agent.agent_id}<br>{detail}<br>Neighbors: {len(agent.neighbor_ids)}"
+                    f"UAV {agent.agent_id}<br>{detail}<br>"
+                    f"Coordination: {agent.coordination_mode}<br>"
+                    f"Neighbors: {len(agent.neighbor_ids)}"
                 ],
                 hoverinfo="text",
                 showlegend=False,
@@ -293,14 +330,21 @@ def _network_figure(frame: TraceFrame) -> go.Figure:
     return figure
 
 
-def _event_at_or_before(
-    events: tuple[TraceEvent, ...], timestamp: float
-) -> TraceEvent | None:
-    visible = [event for event in events if event.timestamp <= timestamp]
+def _activity_at_or_before(
+    events: tuple[TraceEvent, ...],
+    transitions: tuple[TraceTransition, ...],
+    timestamp: float,
+) -> TraceActivity | None:
+    visible: list[TraceActivity] = [
+        activity
+        for activity in (*events, *transitions)
+        if activity.timestamp <= timestamp
+    ]
     if not visible:
         return None
-    current = [event for event in visible if event.timestamp == timestamp]
+    current = [activity for activity in visible if activity.timestamp == timestamp]
     for category in (
+        "AUTONOMY",
         "ALLOCATION",
         "FAILURE",
         "RECOVERY",
@@ -309,17 +353,38 @@ def _event_at_or_before(
         "TASK",
         "MISSION",
     ):
-        matching = [event for event in current if event.category == category]
+        matching = [
+            activity for activity in current if _activity_category(activity) == category
+        ]
         if matching:
-            return matching[-1]
-    return visible[-1]
+            return max(matching, key=_activity_sort_key)
+    return max(visible, key=_activity_sort_key)
 
 
-def _decision_panel(event: TraceEvent | None, frame: TraceFrame) -> None:
+def _decision_panel(activity: TraceActivity | None, frame: TraceFrame) -> None:
     st.subheader("Current decision / event")
-    if event is None:
+    if activity is None:
         st.info("No event has occurred yet.")
         return
+    if isinstance(activity, TraceTransition):
+        st.caption(f"{activity.timestamp:05.2f} s · AUTONOMY")
+        st.markdown(f"### {activity.machine}")
+        st.write(
+            f"UAV {activity.observer_agent_id}: **{activity.previous_state}** → "
+            f"**{activity.next_state}**"
+        )
+        st.write(f"Event: `{activity.event}`")
+        if activity.peer_agent_id is not None:
+            st.write(f"Peer: **UAV {activity.peer_agent_id}**")
+        if activity.task_id is not None:
+            st.write(f"Task: **{activity.task_id}**")
+        st.write(f"Guard: {activity.guard}")
+        st.caption(activity.reason)
+        if activity.effects:
+            st.write(f"Requested effects: `{', '.join(activity.effects)}`")
+        return
+
+    event = activity
     st.caption(f"{event.timestamp:05.2f} s · {event.category}")
     st.markdown(f"### {event.kind.replace('_', ' ').title()}")
     st.write(event.message)
@@ -376,6 +441,7 @@ def _status_panel(frame: TraceFrame) -> None:
             f"<span>Task {task}</span></div>"
             f"<small>Position ({agent.position[0]:.1f}, {agent.position[1]:.1f}) · "
             f"Neighbors {len(agent.neighbor_ids)}</small>"
+            f"<small>Coordination · <strong>{agent.coordination_mode}</strong></small>"
             f"<small>Peer knowledge · F {agent.fresh_peer_count} · "
             f"S {agent.stale_peer_count} · U {agent.unknown_peer_count}</small>"
             "</div>"
@@ -387,17 +453,34 @@ def _peer_panel(frame: TraceFrame, selected_agent_id: int) -> None:
     selected = _agent(frame, selected_agent_id)
     st.subheader(f"UAV {selected_agent_id} · receiver-local peer knowledge")
     st.caption(
-        "Positions below are delivered last-known snapshots, never authoritative peer positions."
+        f"Coordination mode: {selected.coordination_mode}. Positions below are "
+        "delivered last-known snapshots, never authoritative peer positions."
     )
+    contact_by_peer = {
+        contact.peer_agent_id: contact for contact in selected.contact_states
+    }
     rows = []
     for peer in selected.peer_knowledge:
         age = None if peer.received_at is None else frame.timestamp - peer.received_at
+        contact = contact_by_peer.get(peer.peer_agent_id)
+        contact_age = (
+            None
+            if contact is None or contact.last_rx_at is None
+            else frame.timestamp - contact.last_rx_at
+        )
         position = peer.last_known_position
         rows.append(
             {
                 "Peer": f"UAV {peer.peer_agent_id}",
-                "State": peer.state,
+                "Contact": "—" if contact is None else contact.state,
+                "Knowledge": peer.state,
+                "Availability": peer.peer_status or "—",
                 "Snapshot age": "—" if age is None else f"{age:.2f} s",
+                "Contact age": "—" if contact_age is None else f"{contact_age:.2f} s",
+                "Misses": "—"
+                if contact is None
+                else contact.consecutive_expected_misses,
+                "Recovery": "—" if contact is None else contact.recovery_count,
                 "Last task": "—"
                 if peer.last_known_task is None
                 else peer.last_known_task,
@@ -453,23 +536,56 @@ def _ownership_panel(frame: TraceFrame) -> None:
     st.dataframe(rows, hide_index=True, use_container_width=True)
 
 
+def _transition_panel(frame: TraceFrame) -> None:
+    st.subheader("Autonomy transitions · current frame")
+    if not frame.transitions:
+        st.caption("No finite control-state change occurred in this frame.")
+        return
+    st.dataframe(
+        [
+            {
+                "UAV": f"UAV {transition.observer_agent_id}",
+                "Sequence": transition.sequence,
+                "Machine": transition.machine,
+                "Transition": (
+                    f"{transition.previous_state} → {transition.next_state}"
+                ),
+                "Event": transition.event,
+                "Guard": transition.guard,
+                "Reason": transition.reason,
+                "Effects": ", ".join(transition.effects) or "—",
+            }
+            for transition in frame.transitions
+        ],
+        hide_index=True,
+        use_container_width=True,
+    )
+
+
 def _timeline(
-    events: Iterable[TraceEvent], duration: float, timestamp: float
+    events: Iterable[TraceEvent],
+    transitions: Iterable[TraceTransition],
+    duration: float,
+    timestamp: float,
 ) -> go.Figure:
-    events = tuple(events)
+    activities: tuple[TraceActivity, ...] = (*events, *transitions)
     categories = tuple(CATEGORY_COLORS)
     y_index = {category: index for index, category in enumerate(categories)}
     figure = go.Figure()
     for category in categories:
-        selected = [event for event in events if event.category == category]
+        selected = [
+            activity
+            for activity in activities
+            if _activity_category(activity) == category
+        ]
         if selected:
             figure.add_trace(
                 go.Scatter(
-                    x=[event.timestamp for event in selected],
+                    x=[activity.timestamp for activity in selected],
                     y=[y_index[category]] * len(selected),
                     mode="markers",
                     marker={"size": 8, "color": CATEGORY_COLORS[category]},
-                    text=[event.message for event in selected],
+                    text=[_activity_message(activity) for activity in selected],
                     hoverinfo="text+x",
                     name=category.title(),
                 )
@@ -570,6 +686,7 @@ def render_dashboard() -> None:
         st.session_state.playing = False
 
     events = _all_events(trace)
+    transitions = _all_transitions(trace)
     header = st.container()
     main_area = st.container()
     lower_area = st.container()
@@ -588,7 +705,7 @@ def render_dashboard() -> None:
             prior = [
                 index
                 for index, frame in enumerate(trace.frames)
-                if frame.events and index < current_index
+                if (frame.events or frame.transitions) and index < current_index
             ]
             st.session_state.frame_index = prior[-1] if prior else 0
         if previous_frame.button("◀ Frame", use_container_width=True):
@@ -603,7 +720,7 @@ def render_dashboard() -> None:
             following = [
                 index
                 for index, frame in enumerate(trace.frames)
-                if frame.events and index > current_index
+                if (frame.events or frame.transitions) and index > current_index
             ]
             st.session_state.frame_index = (
                 following[0] if following else len(trace.frames) - 1
@@ -665,12 +782,20 @@ def render_dashboard() -> None:
             config={"displaylogo": False},
         )
         with decision_column:
-            _decision_panel(_event_at_or_before(events, frame.timestamp), frame)
+            _decision_panel(
+                _activity_at_or_before(events, transitions, frame.timestamp),
+                frame,
+            )
 
     with timeline_area:
         st.subheader("Event timeline")
         st.plotly_chart(
-            _timeline(events, trace.metadata.duration, frame.timestamp),
+            _timeline(
+                events,
+                transitions,
+                trace.metadata.duration,
+                frame.timestamp,
+            ),
             use_container_width=True,
             config={"displaylogo": False},
         )
@@ -678,6 +803,7 @@ def render_dashboard() -> None:
     with peer_area:
         _peer_panel(frame, selected_agent_id)
         _ownership_panel(frame)
+        _transition_panel(frame)
 
     with event_area:
         st.subheader("Structured event log")
@@ -686,20 +812,21 @@ def render_dashboard() -> None:
             tuple(CATEGORY_COLORS),
             default=tuple(CATEGORY_COLORS),
         )
-        visible_events = [
-            event
-            for event in events
-            if event.timestamp <= frame.timestamp
-            and event.category in selected_categories
+        visible_activities: list[TraceActivity] = [
+            activity
+            for activity in (*events, *transitions)
+            if activity.timestamp <= frame.timestamp
+            and _activity_category(activity) in selected_categories
         ]
+        visible_activities.sort(key=_activity_sort_key)
         st.dataframe(
             [
                 {
-                    "Time": f"{event.timestamp:05.2f}",
-                    "Category": event.category,
-                    "Event": event.message,
+                    "Time": f"{activity.timestamp:05.2f}",
+                    "Category": _activity_category(activity),
+                    "Event": _activity_message(activity),
                 }
-                for event in reversed(visible_events[-100:])
+                for activity in reversed(visible_activities[-100:])
             ],
             hide_index=True,
             use_container_width=True,

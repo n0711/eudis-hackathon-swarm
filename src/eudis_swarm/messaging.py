@@ -299,12 +299,20 @@ class DeliveryBatch:
     delivered: int
     undelivered: int
     refreshed_observations: tuple[tuple[int, int], ...]
+    delivered_observations: tuple[tuple[int, int], ...]
 
     def __post_init__(self) -> None:
         if min(self.attempted, self.delivered, self.undelivered) < 0:
             raise ValueError("delivery counts must be non-negative")
         if self.attempted != self.delivered + self.undelivered:
             raise ValueError("attempted deliveries must equal batch outcomes")
+        if (
+            len(self.delivered_observations) != self.delivered
+            or len(set(self.delivered_observations)) != self.delivered
+        ):
+            raise ValueError("delivered observations must identify each receipt once")
+        if not set(self.refreshed_observations) <= set(self.delivered_observations):
+            raise ValueError("refreshed observations must have been delivered")
 
 
 @dataclass(frozen=True, slots=True)
@@ -583,6 +591,7 @@ class PeerStateTransport:
         attempted = 0
         delivered = 0
         refreshed: list[tuple[int, int]] = []
+        delivered_observations: list[tuple[int, int]] = []
         for snapshot in ordered_snapshots:
             # one neighbor lookup replaces a validated graph lookup per receiver.
             active_receivers = self._graph.neighbors(snapshot.agent_id) & receivers
@@ -593,6 +602,7 @@ class PeerStateTransport:
                 if receiver_agent_id not in active_receivers:
                     continue
                 delivered += 1
+                delivered_observations.append((receiver_agent_id, snapshot.agent_id))
                 if self._stores[receiver_agent_id].receive(snapshot, timestamp):
                     refreshed.append((receiver_agent_id, snapshot.agent_id))
 
@@ -602,6 +612,7 @@ class PeerStateTransport:
             delivered=delivered,
             undelivered=attempted - delivered,
             refreshed_observations=tuple(refreshed),
+            delivered_observations=tuple(delivered_observations),
         )
 
     def deliver_failure_votes(

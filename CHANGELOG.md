@@ -9,6 +9,27 @@ and interfaces change between prototypes.
 
 ### Added
 
+- A composed, pure EFSM autonomy kernel with explicit typed events, bounded
+  extended variables, guards, deterministic transition results, and requested
+  effects for receiver-local contact, peer availability, task ownership, and
+  per-UAV coordination mode. The machines remain independent rather than
+  constructing one cross-product swarm state.
+- One `LocalAutonomyKernel` per UAV. Contact changes are driven only by
+  successfully received heartbeats/protocol hops and receiver-local time;
+  forwarded evidence is attributed to the immediate forwarding UAV rather than
+  its immutable logical origin. Graph transitions, radio equations, mutable
+  remote agents, and observer state are not machine inputs.
+- Canonical machine definitions with generated Markdown transition tables,
+  exhaustive bounded event-sequence tests, deterministic replay checks, local
+  knowledge dependency audits, and scenario tests for contact loss/recovery,
+  state divergence, transient task contests, and reconciliation.
+- Playback trace schema version 3, recording each UAV's contact and coordination
+  state plus ordered transition records containing timestamp, local sequence,
+  machine, prior state, event, next state, guard, reason, and requested effects.
+- Dashboard panels for simultaneous per-UAV coordination modes, per-peer contact
+  state/age/misses/recovery, and a structured autonomy-transition timeline.
+- `docs/autonomy_efsm.md` and `docs/prior_art.md`, separating implemented
+  machinery from research comparators and planned mission/search/role work.
 - `RadioModel`: a frozen free-space line-of-sight link model implementing the
   path-loss, SNR and BPSK bit-error-rate relations of Hu, Ren & Cheng
   (arXiv:2407.11531, eqs. 5-10), with `can_link()` for the hard
@@ -107,8 +128,9 @@ and interfaces change between prototypes.
   received lease has strictly expired.
 - Claim renewal is paced at the local freshness threshold instead of every
   simulation tick.
-- The playback trace (schema version 2) carries world truth, per-agent belief
-  and every replica's ownership view in one frame, with disputed tasks flagged.
+- The playback trace (now schema version 3) carries world truth, per-agent
+  belief, every replica's ownership view, composed autonomy state, and ordered
+  EFSM transitions in one frame, with disputed tasks flagged.
 - Non-participating UAV software no longer advances or receives updates to its
   private freshness state.
 - The connectivity task-control option derives its communication utility only
