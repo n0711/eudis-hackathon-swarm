@@ -8,6 +8,14 @@ and interfaces change between prototypes.
 ## [Unreleased]
 
 ### Added
+- `physically_failed_count` and `undetected_failure_count` metrics, separating
+  aircraft that actually stopped from aircraft the swarm managed to declare. The
+  mission summary now reports both plus "Losses never detected".
+- Regression tests pinning the connectivity floor of failure detection. On the
+  default scenario a genuinely dead UAV is declared at `communication_range`
+  78.0 and above, and never declared at 75.0 and below, where its coordinator
+  status stays `ACTIVE` for the whole mission while all twenty tasks still
+  complete.
 
 - A composed, pure EFSM autonomy kernel with explicit typed events, bounded
   extended variables, guards, deterministic transition results, and requested

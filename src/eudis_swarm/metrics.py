@@ -377,7 +377,31 @@ class SimulationMetrics:
 
     @property
     def failed_agent_count(self) -> int:
+        """Count UAVs the swarm has *declared* failed. This is belief."""
+
         return sum(record.detected_at is not None for record in self.failures.values())
+
+    @property
+    def physically_failed_count(self) -> int:
+        """Count UAVs that actually stopped, whatever the swarm believes."""
+
+        return sum(record.injected_at is not None for record in self.failures.values())
+
+    @property
+    def undetected_failure_count(self) -> int:
+        """Count aircraft lost without the swarm ever noticing.
+
+        Declaration needs a quorum of peers that can still hear each other. Below
+        a connectivity threshold the survivors never assemble one, so a UAV can
+        stop flying and keep its ``ACTIVE`` coordinator status for the rest of
+        the mission. The work is still recovered, because ownership leases
+        expire on their own -- but nobody knows an aircraft was lost.
+        """
+
+        return sum(
+            record.injected_at is not None and record.detected_at is None
+            for record in self.failures.values()
+        )
 
     @property
     def orphaned_task_count(self) -> int:
@@ -445,7 +469,9 @@ class SimulationMetrics:
             f"Mission completed: {'YES' if self.mission_completed else 'NO'}",
             f"Tasks completed: {self.completed_task_count} / {self.total_task_count}",
             f"Agents started: {self.agents_started}",
-            f"Agents failed: {self.failed_agent_count}",
+            f"Agents physically lost: {self.physically_failed_count}",
+            f"Agents declared failed: {self.failed_agent_count}",
+            f"Losses never detected: {self.undetected_failure_count}",
             f"Orphaned tasks: {self.orphaned_task_count}",
             f"Tasks reassigned: {self.reassigned_task_count}",
             f"Recovered tasks: {self.recovered_task_count}",
