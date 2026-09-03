@@ -269,6 +269,7 @@ class PeerStateTransport:
             declaration.agent_id,
             voter_agent_ids=declaration.voter_agent_ids,
             required_votes=declaration.required_votes,
+            evidence_last_heartbeat=declaration.last_heartbeat,
         )
 
     def _receivers(self, supplied_agent_ids: Iterable[int] | None) -> frozenset[int]:

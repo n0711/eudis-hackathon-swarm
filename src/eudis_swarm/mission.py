@@ -392,12 +392,31 @@ class Mission:
         agent = self.agents[agent_id]
         if not agent.wrongly_declared:
             return False
+        # while it was believed dead the coordinator may have given its work to
+        # somebody else.  Rejoining with a pointer to a task it no longer owns
+        # would break bidirectional ownership, so surrender it here and drop the
+        # matching claim so the ownership layer converges too.
+        if agent.current_task is not None:
+            stale_task_id = agent.current_task
+            if self.tasks[stale_task_id].assigned_agent != agent_id:
+                agent.release_task(stale_task_id)
+                if self.task_claim_stores is not None:
+                    store = self.task_claim_stores[agent_id]
+                    if store.owns_task(stale_task_id, timestamp):
+                        store.release_claim(stale_task_id, timestamp)
+                self.metrics.rejoin_surrendered_task_count += 1
+                LOGGER.info(
+                    "[REJOIN] UAV %d surrendered Task %d, reassigned while it was "
+                    "believed dead",
+                    agent_id,
+                    stale_task_id,
+                )
         agent.status = (
             AgentStatus.ACTIVE if agent.current_task is not None else AgentStatus.IDLE
         )
         self.failure_manager.retract_declaration(agent_id)
         self.metrics.failures.pop(agent_id, None)
-        self.metrics.declaration_retraction_count += 1
+        self.metrics.record_declaration_retraction(agent_id)
         self._event(
             MissionEventKind.FAILURE_RETRACTED,
             timestamp,

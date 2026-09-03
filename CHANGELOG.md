@@ -77,6 +77,19 @@ and interfaces change between prototypes.
 
 ### Fixed
 
+- A rejoining UAV no longer keeps a pointer to work reassigned while it was
+  believed dead. `Mission.retract_declaration` surrenders the stale task and
+  releases the matching claim, so `assert_consistent()` cannot raise
+  `agent/task ownership links do not match` when a wrongly declared UAV fails
+  to reach its task before communications return.
+- Declaration certificates are retransmitted, so a certificate built from
+  evidence older than a snapshot the receiver has since accepted is now
+  rejected. Previously such a replay could silently re-declare a UAV the swarm
+  had already heard from, and a retraction witness could persist across a new
+  declaration and withdraw it on the next tick.
+- An orphaned task may return to its original owner once that owner's
+  declaration has been retracted; the metrics guard now applies only to UAVs
+  still believed failed.
 - Documented recovery for a stale editable install after the repository is
   moved, which previously surfaced as `ModuleNotFoundError: No module named
   'eudis_swarm'` across the whole test suite.

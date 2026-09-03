@@ -452,3 +452,40 @@ def test_a_physically_dead_uav_stops_and_releases_its_work() -> None:
     assert metrics.duplicated_task_completion_count == 0
     assert metrics.simulation_duration == 17.25
     assert metrics.completed_task_count == 20
+
+
+def test_a_rejoining_uav_surrenders_work_reassigned_while_it_was_believed_dead() -> (
+    None
+):
+    """Rejoining must not resurrect a claim on work somebody else now owns.
+
+    Here UAV 2 flies too slowly to reach its task before the link returns, so
+    unlike the faster scenario above it is still holding the task pointer when
+    the declaration is withdrawn. That pointer names work the coordinator has
+    since given to a peer, and keeping it would break bidirectional ownership.
+    """
+
+    result = Simulation(
+        SimulationConfig(
+            failure_time=100.0,
+            communication_range=130.0,
+            comm_fault_agent_id=2,
+            comm_fault_start=3.0,
+            comm_fault_end=6.0,
+            agent_speed=3.0,
+            heartbeat_interval=0.5,
+        )
+    ).run()
+    metrics = result.metrics
+    agent = result.mission.agents[2]
+
+    assert metrics.declaration_retraction_count == 1
+    assert metrics.rejoin_surrendered_task_count == 1
+
+    # the reinstated UAV holds nothing it does not own, and the mission finishes.
+    assert agent.wrongly_declared is False
+    if agent.current_task is not None:
+        assert result.mission.tasks[agent.current_task].assigned_agent == 2
+    result.mission.assert_consistent()
+    assert metrics.mission_completed is True
+    assert metrics.completed_task_count == 20

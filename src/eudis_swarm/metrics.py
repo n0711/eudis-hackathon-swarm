@@ -54,6 +54,7 @@ class SimulationMetrics:
     declaration_retraction_count: int = 0
     claim_refused_allocation_count: int = 0
     contested_task_yield_count: int = 0
+    rejoin_surrendered_task_count: int = 0
     allocation_policy: str = "distance"
     connectivity_aware_assignment_count: int = 0
     predicted_isolation_assignment_count: int = 0
@@ -61,6 +62,7 @@ class SimulationMetrics:
     minimum_predicted_peer_degree: int | None = None
     allocation_decisions: list[AllocationRecord] = field(default_factory=list)
     completed_task_ids: set[int] = field(default_factory=set)
+    reinstated_agent_ids: set[int] = field(default_factory=set)
     failures: dict[int, FailureRecord] = field(default_factory=dict)
     recoveries: dict[int, RecoveryRecord] = field(default_factory=dict)
     initial_link_count: int | None = None
@@ -139,10 +141,21 @@ class SimulationMetrics:
         timestamp = self._observe_time(timestamp)
         recovery = self.recoveries[task_id]
         if recovery.reassigned_agent_id is None:
-            if agent_id == recovery.failed_agent_id:
+            # a UAV whose declaration was withdrawn is not failed any more, so
+            # it may legitimately be given back the work it lost.
+            if (
+                agent_id == recovery.failed_agent_id
+                and agent_id not in self.reinstated_agent_ids
+            ):
                 raise ValueError("an orphaned task cannot return to its failed owner")
             recovery.reassigned_agent_id = agent_id
             recovery.reassigned_at = timestamp
+
+    def record_declaration_retraction(self, agent_id: int) -> None:
+        """Record that first-hand contact reinstated a wrongly declared UAV."""
+
+        self.reinstated_agent_ids.add(agent_id)
+        self.declaration_retraction_count += 1
 
     def record_task_completion(self, task_id: int, timestamp: float) -> None:
         timestamp = self._observe_time(timestamp)

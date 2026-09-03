@@ -325,6 +325,7 @@ class FailureManager:
                     suspected_agent_id,
                     voter_agent_ids=matching_voters,
                     required_votes=required_votes,
+                    evidence_last_heartbeat=declaration.last_heartbeat,
                 )
                 self._declarations_by_declarer[declarer_agent_id][
                     suspected_agent_id

@@ -140,13 +140,6 @@ class PeerStateStore:
             return PeerStatus.HEARD
         return PeerStatus.SILENT
 
-    def heard_at_for(self, peer_agent_id: int) -> float | None:
-        """Return when this receiver last heard from a peer, or ``None``."""
-
-        self._require_peer(peer_agent_id)
-        observation = self._observations.get(peer_agent_id)
-        return None if observation is None else observation.received_at
-
     def observation_for(self, peer_agent_id: int) -> PeerObservation | None:
         self._require_peer(peer_agent_id)
         return self._observations.get(peer_agent_id)
@@ -232,8 +225,15 @@ class PeerStateStore:
         *,
         voter_agent_ids: Iterable[int],
         required_votes: int,
-    ) -> None:
-        """Apply only a declaration carrying a valid distributed vote quorum."""
+        evidence_last_heartbeat: float,
+    ) -> bool:
+        """Apply a quorum-backed declaration unless first-hand contact outranks it.
+
+        ``evidence_last_heartbeat`` is the source heartbeat the declaration was
+        built from. Certificates are retransmitted, so a replayed one can arrive
+        after this receiver has heard the peer again; accepting it would let a
+        stale certificate silently undo a retraction. Returns whether it applied.
+        """
 
         self._require_peer(peer_agent_id)
         validate_positive_integer(required_votes, name="required_votes")
@@ -254,7 +254,17 @@ class PeerStateStore:
             raise ValueError("a suspected peer cannot vote for its own failure")
         if len(unique_voters) < required_votes:
             raise ValueError("failure declaration does not carry a valid quorum")
+        observation = self._observations.get(peer_agent_id)
+        if (
+            observation is not None
+            and observation.snapshot.timestamp > evidence_last_heartbeat
+        ):
+            return False
         self._declared_failed_peer_ids.add(peer_agent_id)
+        # retraction evidence is scoped to the declaration it overturned, so a
+        # genuinely newer declaration clears it and must be withdrawn afresh.
+        self._retracted_peer_ids.discard(peer_agent_id)
+        return True
 
     def advance_time(self, timestamp: float) -> tuple[int, ...]:
         """Apply strict freshness expiry and return newly stale peer IDs."""

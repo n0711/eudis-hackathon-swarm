@@ -139,10 +139,42 @@ def test_silence_and_insufficient_quorum_never_declare_failure() -> None:
             2,
             voter_agent_ids=(1,),
             required_votes=2,
+            evidence_last_heartbeat=0.0,
         )
 
     assert store.status_for(2) is PeerStatus.SILENT
     assert store.declared_failed_peer_ids == frozenset()
+
+
+def test_a_replayed_certificate_cannot_undo_a_retraction() -> None:
+    """First-hand contact outranks a certificate built from older evidence.
+
+    Declaration certificates are retransmitted, so one issued before the link
+    healed keeps arriving afterwards. Accepting it would silently re-kill a UAV
+    the swarm has already heard from.
+    """
+
+    store = PeerStateStore(1, (2, 3), stale_after=2.5)
+    quorum = {"voter_agent_ids": (1, 3), "required_votes": 2}
+    store.receive(_snapshot(2, 0.0), 0.0)
+    assert store.apply_failure_declaration(2, **quorum, evidence_last_heartbeat=0.0)
+    assert store.status_for(2) is PeerStatus.DECLARED_FAILED
+
+    # the link heals and UAV 2 is plainly transmitting again
+    store.receive(_snapshot(2, 1.0), 1.0)
+    assert store.declared_failed_peer_ids == frozenset()
+    assert store.retracted_peer_ids == frozenset({2})
+
+    # the old certificate is retransmitted and must be ignored
+    assert not store.apply_failure_declaration(2, **quorum, evidence_last_heartbeat=0.0)
+    assert store.declared_failed_peer_ids == frozenset()
+    assert store.retracted_peer_ids == frozenset({2})
+
+    # a declaration built from the newer silence is still allowed through, and
+    # it invalidates the stale retraction witness so it must be earned again.
+    assert store.apply_failure_declaration(2, **quorum, evidence_last_heartbeat=1.0)
+    assert store.declared_failed_peer_ids == frozenset({2})
+    assert store.retracted_peer_ids == frozenset()
 
 
 @pytest.mark.parametrize("value", [0.0, -1.0, True, float("nan"), float("inf")])
