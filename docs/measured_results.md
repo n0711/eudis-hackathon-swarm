@@ -112,6 +112,35 @@ measurement rather than asserted.
 That the right policy depends on the mission is exactly why the choice belongs
 to the operator rather than to the code.
 
+## 4. Recovering from a loss the swarm cannot declare
+
+The quorum threshold is `max(2, floor((N - 1) / 2) + 1)`, so one observer can
+never declare a peer failed. With two aircraft that makes failure permanently
+undeclarable: the survivor is the only witness.
+
+Found by a robustness sweep over 432 configurations, which produced no crashes
+but 108 incomplete missions — every one of them centralized, none distributed.
+
+| aircraft | mode | declared | never detected | tasks | mission |
+| ---: | --- | ---: | ---: | ---: | --- |
+| 2 | centralized | 0 | 1 | **2/3** | **failed** |
+| 2 | distributed | 0 | 1 | 3/3 | completed |
+| 3 | centralized | 1 | 0 | 3/3 | completed |
+| 3 | distributed | 1 | 0 | 3/3 | completed |
+
+Both modes are equally blind: neither declares the loss. The difference is
+what recovery depends on. Central reassignment is gated on a declaration that
+can never arrive, so the coordinator holds a task assigned to an aircraft that
+has stopped and the mission cannot finish. Distributed ownership recovers
+through lease expiry, which requires no agreement at all, so the survivor
+simply re-claims the work.
+
+A third aircraft restores the quorum and both modes recover, which confirms the
+floor is about witness count rather than about the control model.
+
+This is the sharpest argument in the project: **consensus-free recovery keeps
+working in exactly the conditions that make consensus impossible.**
+
 ## Reproducibility
 
 Sweeps are deterministic: the same seeds produce byte-identical CSV, asserted
