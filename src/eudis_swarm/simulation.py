@@ -14,7 +14,7 @@ from dataclasses import dataclass, replace
 from typing import Mapping, Sequence
 
 from . import __version__
-from .agent import Agent, AgentStatus, Heartbeat, Position
+from .agent import Agent, AgentStatus, Heartbeat, Position, advance_point_mass
 from .autonomy import (
     ContactPolicy,
     CoordinationPolicy,
@@ -414,15 +414,11 @@ class Simulation:
                 positions[agent.agent_id] = agent.position
                 continue
             target = self._task_objectives_by_id[task_id].position
-            distance = agent.distance_to(target)
-            if distance == 0.0:
-                positions[agent.agent_id] = agent.position
-                continue
-            travel = min(agent.speed * elapsed, distance)
-            ratio = travel / distance
-            positions[agent.agent_id] = (
-                agent.position[0] + (target[0] - agent.position[0]) * ratio,
-                agent.position[1] + (target[1] - agent.position[1]) * ratio,
+            # A prediction, not an observation: this asks where the vehicle
+            # *would* be, which is only the same as where it will be while the
+            # motion model and the vehicle are one and the same.
+            positions[agent.agent_id] = advance_point_mass(
+                agent.position, target, agent.speed, elapsed
             )
         return positions
 

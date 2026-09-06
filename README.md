@@ -647,6 +647,7 @@ eudis-swarm/
 │   ├── distributed_state_foundation.md   # state boundary, EFSM, quorum, leases, reconciliation
 │   ├── autonomy_efsm.md                   # generated transition tables + composition/locality rules
 │   ├── vehicle_model.md                   # open lane: kinematics, energy, calibration
+│   ├── sitl.md                            # software-in-the-loop plan, and what it must not cost
 │   ├── prior_art.md                       # evidence-bounded research/industrial comparison
 │   ├── prototype_0_1.md … prototype_0_3a.md
 │   ├── visualization_layer.md

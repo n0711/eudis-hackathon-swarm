@@ -8,6 +8,17 @@ and interfaces change between prototypes.
 ## [Unreleased]
 
 ### Added
+- `docs/sitl.md`, preparing a software-in-the-loop path against real autopilot
+  firmware. It fixes the rules first: a SITL run may never produce a measured
+  result, MAVLink bindings live behind an optional extra, and telemetry enters
+  as world truth through the vehicle layer rather than into any UAV's beliefs.
+- `advance_point_mass`, now the single definition of how a vehicle moves.
+  Movement and prediction previously carried the same arithmetic in two places.
+  They are the same question only while the motion model *is* the vehicle; under
+  a real autopilot they separate, and the divergence between them becomes
+  measurable rather than impossible.
+- `tests/test_vehicle_model.py`, pinning that prediction and movement agree
+  today, so that when SITL ends that equivalence it ends visibly.
 - `docs/threat_context.md`, citing the operating environment the project is
   aimed at rather than asserting it: EASA currently lists `LCCC NICOSIA` among
   the FIRs affected by GNSS jamming and spoofing, and Osechas et al.
@@ -208,6 +219,10 @@ and interfaces change between prototypes.
   completion without authoritative ownership fields.
 
 ### Changed
+- `Agent.move_toward` carried a comment saying a UAV believed dead "keeps
+  flying" directly above the guard that stops an unresponsive one from moving.
+  The guard keys on physical truth and is correct; the comment now says so
+  without reading as its own opposite.
 - **Trace schema 5 to 6.** `TraceMetadata` now records `task_control`, so a
   replay knows which control model produced it. Traces recorded under schema 5
   are rejected with the usual unsupported-version error and must be re-recorded.

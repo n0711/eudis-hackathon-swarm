@@ -45,6 +45,29 @@ class Heartbeat:
         validate_timestamp(self.timestamp)
 
 
+def advance_point_mass(
+    origin: Position, target: Position, speed: float, elapsed: float
+) -> Position:
+    """Return where a constant-speed point mass reaches, never overshooting.
+
+    This is the single definition of how a vehicle moves. It is used both to
+    move an aircraft and to predict where one would be, which today are the
+    same arithmetic. Under a real autopilot they stop being the same thing --
+    a commanded vehicle does not travel the straight line a planner assumes --
+    so the two callers are deliberately kept distinguishable.
+    """
+
+    distance = hypot(target[0] - origin[0], target[1] - origin[1])
+    if distance == 0.0:
+        return origin
+    travel = min(speed * elapsed, distance)
+    ratio = travel / distance
+    return (
+        origin[0] + (target[0] - origin[0]) * ratio,
+        origin[1] + (target[1] - origin[1]) * ratio,
+    )
+
+
 @dataclass(slots=True)
 class Agent:
     """A point-mass UAV whose ``current_task`` is an intent, not authority."""
@@ -104,19 +127,13 @@ class Agent:
         """Advance toward a target using a constant-speed point update."""
 
         elapsed = validate_timestamp(elapsed, previous=0.0, name="elapsed")
-        # a UAV its peers wrongly believe is dead keeps flying.
+        # Keyed on physical truth, never on the swarm's belief: a UAV that has
+        # actually stopped does not move, while one merely *declared* failed
+        # keeps flying, because `declare_failed` never touches `responsive`.
         if not self.responsive:
             return
 
-        distance = self.distance_to(target)
-        if distance == 0.0:
-            return
-        travel = min(self.speed * elapsed, distance)
-        ratio = travel / distance
-        self.position = (
-            self.position[0] + (target[0] - self.position[0]) * ratio,
-            self.position[1] + (target[1] - self.position[1]) * ratio,
-        )
+        self.position = advance_point_mass(self.position, target, self.speed, elapsed)
 
     def send_heartbeat(self, timestamp: float) -> Heartbeat | None:
         """Return a state snapshot, or nothing after a physical failure."""
