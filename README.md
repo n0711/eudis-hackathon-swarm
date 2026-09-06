@@ -394,6 +394,9 @@ never notices it, and no mission-level number reveals that an aircraft is gone.
 
 ## Coordination costs, measured
 
+Full tables, reproducible commands, and the limits of these claims are in
+[`docs/measured_results.md`](docs/measured_results.md).
+
 Neither control mode is better. They fail in opposite ways, over twelve seeds
 on `demo-partition`:
 
