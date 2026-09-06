@@ -336,6 +336,88 @@ The physical `RadioModel` still generates world-level delivery outcomes. The
 those outcomes; it never receives distance, SNR, BER, jammer state, or graph
 reachability.
 
+### Milestone 5 — Mission Contract, Wasted-work Measurement, and Comparison
+
+Modules: [`mission_contract.py`](src/eudis_swarm/mission_contract.py),
+[`evaluation.py`](src/eudis_swarm/evaluation.py),
+[`sweep.py`](src/eudis_swarm/sweep.py), and the `MissionPhaseEFSM` in
+[`autonomy.py`](src/eudis_swarm/autonomy.py).
+
+- **Versioned operator intent.** A `MissionContract` carries objective
+  priorities, a minimum-participants floor, and a degradation policy of
+  `CONTINUE`, `HOLD` or `ABORT`. It is deliberately not a plan: nothing in it
+  says who does what, because the operator is not on the network when the
+  partition happens. Supersession is strictly by increasing version, so a
+  replayed or reordered amendment cannot roll intent backwards.
+- **Per-UAV mission posture.** `MissionPhaseEFSM` gives each aircraft a
+  `BRIEFED`, `EXECUTING`, `HOLDING`, `ABORTED` or `COMPLETE` posture derived from
+  its own coordination mode and the contract version it actually holds. Two
+  aircraft either side of a partition may legitimately disagree. A UAV holding
+  no contract is unconstrained rather than forbidden: a contract only ever adds
+  restraint.
+- **Intent propagates as evidence.** `MissionContractTransport` floods
+  amendments over the same deterministic store-and-forward gossip that carries
+  ownership evidence, so a partition splits intent exactly as it splits
+  everything else.
+- **Wasted work is measured, not asserted.** `evaluation.py` integrates
+  concurrent ownership, abandoned time, dropped ownership and contested time
+  over logical time by reading every replica's private store at one instant —
+  a comparison no UAV can make. These are labelled evaluator-computed ground
+  truth wherever they are displayed.
+- **Losses the swarm never notices.** `physically_failed_count` and
+  `undetected_failure_count` separate aircraft that actually stopped from
+  aircraft the swarm managed to declare. Detection has a connectivity floor:
+  see [Failure detection floor](#failure-detection-floor).
+- **Selectable control mode.** `--task-control` chooses replicated distributed
+  ownership or the centralized coordinator baseline, which makes the two
+  directly comparable rather than merely described.
+
+## Failure detection floor
+
+Declaring a UAV failed needs a quorum of peers that can still hear each other,
+and nothing guarantees one exists. Sweeping `communication_range` over the
+default scenario shows the detector failing as a cliff rather than a gradient:
+
+| range | physically lost | declared | never detected | tasks |
+| ---: | ---: | ---: | ---: | ---: |
+| 130 | 1 | 1 | 0 | 20/20 |
+| 90 | 1 | 1 | 0 | 20/20 |
+| 78 | 1 | 1 | 0 | 20/20 |
+| 75 | 1 | 0 | **1** | 20/20 |
+| 50 | 1 | 0 | **1** | 20/20 |
+
+At 75.0 and below the aircraft stops at `t=4.00 s` and is never declared. Its
+coordinator status stays `ACTIVE` for the whole mission, no task is released,
+and all twenty tasks still complete because ownership leases expire on their
+own. The ownership layer is resilient to the loss; the health layer simply
+never notices it, and no mission-level number reveals that an aircraft is gone.
+
+## Coordination costs, measured
+
+Neither control mode is better. They fail in opposite ways, over twelve seeds
+on `demo-partition`:
+
+| control mode | concurrent ownership | stranded work |
+| --- | ---: | ---: |
+| centralized | 0.000 | 3.667 |
+| distributed | 0.292 | 0.000 |
+
+A central coordinator serialises every assignment, so two UAVs never both
+believe they own a task — and it hands work to aircraft it cannot reach, which
+is then stranded. Replicated ownership strands nothing and pays with occasional
+double-booking during a partition.
+
+The operator's degradation policy is a dial on that same trade-off:
+
+| policy | tasks | duration | double-booked |
+| --- | ---: | ---: | ---: |
+| `CONTINUE` | 20/20 | 11.75 s | 1.50 |
+| `HOLD` | 20/20 | 19.00 s | 0.00 |
+
+`HOLD` removes double-booking entirely and pays 62% more mission time. That the
+right answer depends on the mission is exactly why the choice belongs to the
+operator rather than to the code.
+
 ## Task Ownership EFSM
 
 `TaskClaimStore` remains the operational evidence ledger and `owns_task()`
@@ -591,6 +673,47 @@ python -m pyright
 python -m build
 ```
 
+### Named demonstration scenarios
+
+Each story is one command rather than eight flags. Presets override the
+matching options and leave every default untouched.
+
+```bash
+eudis-swarm --scenario demo-failstop    # a UAV really dies; the quorum notices
+eudis-swarm --scenario demo-partition   # a balanced 2+2 split that heals
+eudis-swarm --scenario demo-amendment   # operator intent diverges mid-partition
+eudis-swarm --scenario baseline         # the same split under central control
+```
+
+### Side-by-side belief comparison
+
+Record the same scenario under both control modes and replay them together.
+In the sidebar, switch **View** to **Belief comparison**.
+
+```bash
+eudis-swarm --scenario baseline --record-trace left.trace.json
+eudis-swarm --scenario demo-partition --record-trace right.trace.json
+eudis-swarm-dashboard left.trace.json
+```
+
+Each panel shows positions and links, every UAV's evidence about every peer,
+its ownership belief per task, its contracted posture and intent version, and
+the evaluator-computed wasted-work counters. Peers are labelled by evidence
+and its age — `HEARD 0.4s`, `SILENT 8.7s`, `DECLARED FAILED (quorum)` — never
+by conclusion. The belief panels are reconstructed only from recorded
+per-agent trace fields; an architecture test fails the build if the dashboard
+ever imports a module carrying authoritative world state.
+
+### Parameter sweeps
+
+```bash
+eudis-swarm-sweep --param lease-timeout --from 0.5 --to 6.0 --steps 12 \
+  --seeds 20 --communication-range 50 --output sweep.csv
+```
+
+One CSV row per (parameter value, seed). The same seeds reproduce
+byte-identical output.
+
 ### Trace-driven playback dashboard (optional)
 
 ```bash
@@ -600,31 +723,34 @@ eudis-swarm-dashboard trace.json
 
 ## Roadmap
 
+Mission Contract + Mission EFSM was the previous recommended milestone and is
+now implemented; see Milestone 5 above. Controlled experiments are partially
+covered: `eudis-swarm-sweep` sweeps lease policy, communication range, failure
+timeout and peer-state staleness against both control modes. RF validation is
+not started.
+
 Planned work — **not yet implemented**:
 
-1. **Mission Contract + Mission EFSM** — versioned operator intent, constraints,
-   priorities, degradation policy, and explicit mission phases above local
-   distributed execution. This is the exact recommended next milestone.
-2. **Coordinated search** — a deterministic execution baseline followed by a
+1. **Coordinated search** — a deterministic execution baseline followed by a
    separately evaluated distributed receding-horizon approach. Ownership answers
    who may act; search planning answers how an owned objective is executed.
-3. **Role EFSM + connectivity support** — evidence- and utility-driven role
+2. **Role EFSM + connectivity support** — evidence- and utility-driven role
    changes, never the shortcut “poor link implies relay.”
-4. **Cyber-physical topology repair and handoff** — close the
+3. **Cyber-physical topology repair and handoff** — close the
    network→knowledge→decision→movement loop, then add an explicit non-weapon
    track/observation handoff protocol.
-5. **Independent local safety/deconfliction supervisor** — spatial separation
+4. **Independent local safety/deconfliction supervisor** — spatial separation
    that never waits for distributed consensus.
-6. **Controlled experiments and RF validation** — sweep delivery loss, jammer
+5. **Controlled experiments and RF validation** — sweep delivery loss, jammer
    duration, topology, lease policy, clocks, and message load against centralized
    and distributed baselines. The analytical radio abstraction must not be
    described as calibrated RF until measurements support that claim.
-7. **Quantum-simulated initial planning benchmark** — QUBO/QAOA candidate plans
+6. **Quantum-simulated initial planning benchmark** — QUBO/QAOA candidate plans
    compared with greedy, heuristic, and exact classical methods where feasible;
    never runtime ownership authority.
-8. **ArduPilot SITL and vehicle adapters**, followed only later by Orounda
+7. **ArduPilot SITL and vehicle adapters**, followed only later by Orounda
    georeferencing and controlled mixed SITL/physical-UAV validation.
-9. **Larger-swarm scaling and tactical/3-D visualization** after the protocol,
+8. **Larger-swarm scaling and tactical/3-D visualization** after the protocol,
    mission, search, role, and safety boundaries are stable.
 
 ## EUDIS Demonstration Direction
