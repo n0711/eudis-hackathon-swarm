@@ -208,6 +208,15 @@ and interfaces change between prototypes.
   completion without authoritative ownership fields.
 
 ### Changed
+- **Trace schema 5 to 6.** `TraceMetadata` now records `task_control`, so a
+  replay knows which control model produced it. Traces recorded under schema 5
+  are rejected with the usual unsupported-version error and must be re-recorded.
+- The comparison view titles each panel from the control mode in that panel's
+  own trace instead of from fixed per-slot labels. Loading the two files in the
+  wrong order previously showed a distributed run under the heading
+  "Centralised coordinator"; the labels now follow the evidence, an unfamiliar
+  mode is reported verbatim rather than guessed at, and the sidebar no longer
+  implies an order. This is the same rule the belief panels already followed.
 - `duplicated_task_completion_count` is renamed `redundant_completion_count`
   and its summary line "Duplicated completions" becomes "Redundant
   completions". It counts completions of already-complete work: a real but

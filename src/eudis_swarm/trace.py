@@ -29,7 +29,7 @@ if TYPE_CHECKING:
     from .mission import Mission
 
 
-TRACE_SCHEMA_VERSION = 5
+TRACE_SCHEMA_VERSION = 6
 
 
 @dataclass(frozen=True, slots=True)
@@ -37,6 +37,11 @@ class TraceMetadata:
     prototype: str
     seed: int
     allocation_policy: str
+    #: Which control model produced this run, so a viewer can label a replay
+    #: from the recording rather than from whichever file slot it was loaded
+    #: into. Without it, a panel title is an assertion about data it cannot
+    #: check.
+    task_control: str
     agent_count: int
     task_count: int
     area_width: float
@@ -432,6 +437,7 @@ class TraceRecorder:
                 prototype="0.3A",
                 seed=self._config.random_seed,
                 allocation_policy=self._config.allocation_policy,
+                task_control=self._config.task_control,
                 agent_count=self._config.agent_count,
                 task_count=self._config.task_count,
                 area_width=self._config.area_width,

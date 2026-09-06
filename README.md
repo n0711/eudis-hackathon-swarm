@@ -599,9 +599,11 @@ intentionally not pinned here; the configured branch-coverage floor is 85%.
 | Tests + coverage | `python -m pytest --cov=eudis_swarm --cov-report=term-missing` | pass at or above 85% |
 | Package build | `python -m build` | build `sdist` + `wheel` |
 
-Current milestone result: **322 tests passed**, total branch-aware coverage is
-**89.14%**, Pyright reports zero errors, Ruff lint/format checks pass, both
+At the current milestone every gate above passes: Pyright reports zero errors,
+Ruff lint and format checks pass, branch coverage sits above the 85% floor, the
 deterministic demos pass, and the source and wheel distributions build cleanly.
+CI runs the same gates on every push to `main`, so the badge at the top of this
+file is the live answer rather than a figure transcribed here and left to rot.
 
 The GitHub Actions workflow runs the same lint, format, type, test/coverage, and
 build steps on Python 3.11 and 3.13 for pushes and pull requests against `main`,
@@ -726,11 +728,17 @@ Each story is one command rather than eight flags. Presets override the
 matching options and leave every default untouched.
 
 ```bash
-eudis-swarm --scenario demo-failstop    # a UAV really dies; the quorum notices
-eudis-swarm --scenario demo-partition   # a balanced 2+2 split that heals
-eudis-swarm --scenario demo-amendment   # operator intent diverges mid-partition
-eudis-swarm --scenario baseline         # the same split under central control
+eudis-swarm --scenario demo-quorum-floor      # two aircraft, one stops, distributed finishes
+eudis-swarm --scenario baseline-quorum-floor  # the same loss under central control: never finishes
+eudis-swarm --scenario demo-failstop          # a UAV really dies; the quorum notices
+eudis-swarm --scenario demo-partition         # a balanced 2+2 split that heals
+eudis-swarm --scenario demo-amendment         # operator intent diverges mid-partition
+eudis-swarm --scenario baseline               # the same split under central control
 ```
+
+`baseline-quorum-floor` is the one preset that deliberately fails, and it exits
+non-zero for that reason. A test asserts it, so a change that let it succeed
+would break the build rather than quietly erase the result.
 
 ### Side-by-side belief comparison
 
@@ -738,10 +746,18 @@ Record the same scenario under both control modes and replay them together.
 In the sidebar, switch **View** to **Belief comparison**.
 
 ```bash
-eudis-swarm --scenario baseline --record-trace left.trace.json
-eudis-swarm --scenario demo-partition --record-trace right.trace.json
+eudis-swarm --scenario demo-quorum-floor --record-trace left.trace.json
+eudis-swarm --scenario baseline-quorum-floor --record-trace right.trace.json
 eudis-swarm-dashboard left.trace.json
 ```
+
+The second command exits non-zero because its mission fails; the trace is still
+written. The two runs are aligned by logical time rather than frame number, so
+once the 10.75 s run has finished its panel holds its final frame while the
+other keeps going — a completed swarm beside one still trying.
+
+Each panel is titled from the control mode recorded in its own trace, so the
+two files may be given in either order without mislabelling a run.
 
 Each panel shows positions and links, every UAV's evidence about every peer,
 its ownership belief per task, its contracted posture and intent version, and

@@ -195,7 +195,7 @@ def test_trace_frame_carries_world_truth_belief_and_ownership_together() -> None
         .trace
     )
     assert trace is not None
-    assert trace.schema_version == 5
+    assert trace.schema_version == 6
 
     disputed_frames = [frame for frame in trace.frames if frame.disputed_task_ids]
     assert disputed_frames, "the split brain never appeared in the trace"

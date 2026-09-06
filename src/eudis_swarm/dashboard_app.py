@@ -654,12 +654,10 @@ def _load_comparison_traces() -> tuple[SimulationTrace | None, SimulationTrace |
     """Load the two traces the side-by-side view compares."""
 
     st.sidebar.header("Comparison traces")
-    left_path = st.sidebar.text_input(
-        "Left (centralised) trace", value="left.trace.json"
-    )
-    right_path = st.sidebar.text_input(
-        "Right (distributed) trace", value="right.trace.json"
-    )
+    # Neither slot implies a control mode: each panel is titled from the trace
+    # it actually loaded, so the two files may be given in either order.
+    left_path = st.sidebar.text_input("Left trace", value="left.trace.json")
+    right_path = st.sidebar.text_input("Right trace", value="right.trace.json")
     loaded: list[SimulationTrace | None] = []
     for label, path in (("left", left_path), ("right", right_path)):
         try:
@@ -1126,13 +1124,36 @@ def _comparison_side(
     _belief_panel(frame)
 
 
-def render_comparison(
-    left: SimulationTrace,
-    right: SimulationTrace,
-    *,
-    left_title: str = "Centralised coordinator",
-    right_title: str = "Replicated ownership",
-) -> None:
+#: How each recorded control mode is named and described on screen. Titles are
+#: read from the trace rather than from the slot a file was loaded into, so
+#: swapping the two inputs swaps the labels instead of mislabelling the runs.
+CONTROL_MODE_LABELS: dict[str, tuple[str, str]] = {
+    "centralized": (
+        "Centralised coordinator",
+        "One coordinator assigns every task from a single consistent view.",
+    ),
+    "distributed": (
+        "Replicated ownership",
+        "Each UAV claims its own work and reconciles on reconnection.",
+    ),
+}
+
+
+def control_mode_caption(trace: SimulationTrace) -> tuple[str, str]:
+    """Name a replay from what it recorded, not from where it was loaded.
+
+    An unrecognised mode is reported verbatim rather than guessed at: a wrong
+    label is worse than an unfamiliar one.
+    """
+
+    mode = trace.metadata.task_control
+    known = CONTROL_MODE_LABELS.get(mode)
+    if known is None:
+        return (f"Control mode: {mode}", "Recorded under an unrecognised control mode.")
+    return known
+
+
+def render_comparison(left: SimulationTrace, right: SimulationTrace) -> None:
     """Draw two runs of one scenario side by side at a shared instant."""
 
     st.caption(REPLAY_PROVENANCE)
@@ -1145,13 +1166,15 @@ def render_comparison(
         step=0.25,
         key="comparison-time",
     )
+    left_title, left_subtitle = control_mode_caption(left)
+    right_title, right_subtitle = control_mode_caption(right)
     left_column, right_column = st.columns(2)
     with left_column:
         _comparison_side(
             left,
             aligned_frame_index(left, timestamp),
             left_title,
-            "One coordinator assigns every task from a single consistent view.",
+            left_subtitle,
             "left",
         )
     with right_column:
@@ -1159,6 +1182,6 @@ def render_comparison(
             right,
             aligned_frame_index(right, timestamp),
             right_title,
-            "Each UAV claims its own work and reconciles on reconnection.",
+            right_subtitle,
             "right",
         )

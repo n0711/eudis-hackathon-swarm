@@ -15,11 +15,13 @@ import pytest
 from eudis_swarm.config import SimulationConfig
 from eudis_swarm.dashboard_app import (
     CONTACT_COLOURS,
+    CONTROL_MODE_LABELS,
     OWNERSHIP_COLOURS,
     OWNERSHIP_LABELS,
     REPLAY_PROVENANCE,
     aligned_frame_index,
     contact_evidence_label,
+    control_mode_caption,
     ownership_evidence_label,
 )
 from eudis_swarm.simulation import SCENARIO_PRESETS, Simulation
@@ -322,6 +324,62 @@ def test_a_finished_run_holds_its_last_frame_while_the_other_runs_on() -> None:
 
     # Meanwhile the failing run is still producing new frames at those instants.
     assert aligned_frame_index(unfinished, last_finished) < len(unfinished.frames) - 1
+
+
+def test_a_replay_is_named_by_what_it_recorded_not_by_where_it_was_loaded() -> None:
+    """Panel titles used to be fixed to the slot, which could label a run wrongly.
+
+    Loading the two files the other way round is an easy thing to do under
+    pressure, and a distributed run titled "Centralised coordinator" would be
+    worse than no title at all.
+    """
+
+    distributed = (
+        Simulation(
+            replace(SimulationConfig(), **SCENARIO_PRESETS["demo-quorum-floor"]),  # type: ignore[arg-type]
+            capture_trace=True,
+        )
+        .run()
+        .trace
+    )
+    centralised = (
+        Simulation(
+            replace(SimulationConfig(), **SCENARIO_PRESETS["baseline-quorum-floor"]),  # type: ignore[arg-type]
+            capture_trace=True,
+        )
+        .run()
+        .trace
+    )
+    assert distributed is not None and centralised is not None
+
+    assert distributed.metadata.task_control == "distributed"
+    assert centralised.metadata.task_control == "centralized"
+
+    assert control_mode_caption(distributed) == CONTROL_MODE_LABELS["distributed"]
+    assert control_mode_caption(centralised) == CONTROL_MODE_LABELS["centralized"]
+    assert control_mode_caption(distributed) != control_mode_caption(centralised)
+
+
+def test_an_unrecognised_control_mode_is_reported_rather_than_guessed() -> None:
+    """A wrong label is worse than an unfamiliar one."""
+
+    trace = (
+        Simulation(
+            replace(SimulationConfig(), **SCENARIO_PRESETS["demo-quorum-floor"]),  # type: ignore[arg-type]
+            capture_trace=True,
+        )
+        .run()
+        .trace
+    )
+    assert trace is not None
+
+    relabelled = replace(
+        trace, metadata=replace(trace.metadata, task_control="hierarchical")
+    )
+    title, subtitle = control_mode_caption(relabelled)
+    assert "hierarchical" in title
+    assert title not in {label for label, _ in CONTROL_MODE_LABELS.values()}
+    assert "unrecognised" in subtitle
 
 
 def test_an_instant_before_the_first_frame_selects_the_first_frame() -> None:
