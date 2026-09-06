@@ -8,6 +8,19 @@ and interfaces change between prototypes.
 ## [Unreleased]
 
 ### Added
+- `SimulationConfig.mission_contract` briefs every UAV before launch, and the
+  contracted posture gates whether a UAV seeks new work. A UAV holding no
+  contract is unconstrained rather than forbidden, so existing scenarios are
+  unchanged. Under the `demo-partition` scenario the operator's degradation
+  policy becomes a dial on the measured trade-off: `CONTINUE` completes 20/20
+  in 11.75 s with 1.50 task-seconds of double-booking, while `HOLD` completes
+  20/20 with none at all and takes 19.00 s.
+- A mission ends as soon as every responsive UAV has been contracted to stand
+  down, rather than running to the simulation timeout. Under `ABORT` the
+  partition run now ends at 2.25 s instead of 300 s, which reports an operator
+  decision as such instead of disguising it as a simulation limit.
+- Playback trace schema version 5, recording each UAV's mission phase and the
+  contract version it holds.
 - `MissionContract`: versioned, immutable operator intent carrying objective
   priorities, a minimum-participants floor, and a degradation policy
   (`CONTINUE`, `HOLD`, `ABORT`). Intent never rolls backwards, so a replayed

@@ -486,3 +486,111 @@ def test_operator_intent_cannot_become_a_route_to_world_truth() -> None:
             f"{module_name} imports {sorted(local_imports - permitted)}, which is "
             "outside its allowlist and may reach world truth"
         )
+
+
+# --------------------------------------------------------------------------
+# the contract in a running mission
+# --------------------------------------------------------------------------
+
+
+def _partition_run(contract: MissionContract | None):
+    from dataclasses import replace as _replace
+
+    from eudis_swarm.config import SimulationConfig
+    from eudis_swarm.simulation import SCENARIO_PRESETS, Simulation
+
+    base = _replace(SimulationConfig(), **SCENARIO_PRESETS["demo-partition"])  # type: ignore[arg-type]
+    return Simulation(_replace(base, mission_contract=contract)).run()
+
+
+def test_an_uncontracted_mission_is_unconstrained() -> None:
+    """A contract only ever adds restraint; its absence changes nothing."""
+
+    uncontracted = _partition_run(None).metrics
+    permissive = _partition_run(
+        build_contract(1, "survey", degradation_policy=DegradationPolicy.CONTINUE)
+    ).metrics
+
+    assert uncontracted.completed_task_count == 20
+    assert uncontracted.simulation_duration == permissive.simulation_duration
+    assert (
+        uncontracted.concurrent_ownership_duration
+        == permissive.concurrent_ownership_duration
+    )
+
+
+def test_hold_trades_mission_time_for_zero_double_booking() -> None:
+    """The operator's policy is a dial on the measured trade-off.
+
+    Holding through a partition removes concurrent ownership entirely, and
+    pays for it in mission duration. Neither outcome is simply better, which
+    is exactly why the choice belongs to the operator rather than the code.
+    """
+
+    pressing_on = _partition_run(
+        build_contract(
+            1,
+            "survey",
+            degradation_policy=DegradationPolicy.CONTINUE,
+            degraded_grace=1.0,
+        )
+    ).metrics
+    holding = _partition_run(
+        build_contract(
+            1, "survey", degradation_policy=DegradationPolicy.HOLD, degraded_grace=1.0
+        )
+    ).metrics
+
+    assert pressing_on.completed_task_count == holding.completed_task_count == 20
+    assert pressing_on.concurrent_ownership_duration > 0.0
+    assert holding.concurrent_ownership_duration == 0.0
+    assert holding.simulation_duration > pressing_on.simulation_duration
+
+
+def test_abort_stops_the_mission_instead_of_burning_the_clock() -> None:
+    """Standing everybody down ends the run honestly, not at a timeout."""
+
+    result = _partition_run(
+        build_contract(
+            1, "survey", degradation_policy=DegradationPolicy.ABORT, degraded_grace=1.0
+        )
+    )
+    metrics = result.metrics
+
+    assert metrics.mission_completed is False
+    assert metrics.completed_task_count < metrics.total_task_count
+    # far below max_simulation_time: it stopped because it was told to
+    assert metrics.simulation_duration is not None
+    assert metrics.simulation_duration < 10.0
+    assert result.autonomy_kernels is not None
+    assert all(
+        kernel.mission_phase is MissionPhase.ABORTED
+        for kernel in result.autonomy_kernels.values()
+    )
+
+
+def test_the_trace_records_each_uav_phase_and_contract_version() -> None:
+    from dataclasses import replace as _replace
+
+    from eudis_swarm.config import SimulationConfig
+    from eudis_swarm.simulation import SCENARIO_PRESETS, Simulation
+
+    base = _replace(SimulationConfig(), **SCENARIO_PRESETS["demo-partition"])  # type: ignore[arg-type]
+    contract = build_contract(
+        3, "survey", degradation_policy=DegradationPolicy.HOLD, degraded_grace=1.0
+    )
+    trace = (
+        Simulation(_replace(base, mission_contract=contract), capture_trace=True)
+        .run()
+        .trace
+    )
+    assert trace is not None
+
+    phases = {agent.mission_phase for frame in trace.frames for agent in frame.agents}
+    versions = {
+        agent.contract_version for frame in trace.frames for agent in frame.agents
+    }
+
+    assert versions == {3}, "every UAV was briefed with the same version"
+    assert MissionPhase.EXECUTING.value in phases
+    assert MissionPhase.HOLDING.value in phases

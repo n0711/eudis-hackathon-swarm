@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from .communication import RadioModel, RegionJammer
+from .mission_contract import MissionContract
 from .validation import (
     validate_nonnegative_real,
     validate_positive_integer,
@@ -29,6 +30,7 @@ class SimulationConfig:
     peer_state_stale_after: float = 2.5
     allocation_policy: str = "distance"
     task_control: str = "distributed"
+    mission_contract: MissionContract | None = None
     claim_lease_duration: float = 2.5
     failure_agent_id: int = 2
     failure_time: float = 4.0

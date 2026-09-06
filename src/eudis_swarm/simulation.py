@@ -261,9 +261,27 @@ class Simulation:
         self._blocked_communication_agents: set[int] = set()
         self._last_communication_update: float | None = None
         self._last_communication_event: float | None = None
+        if config.mission_contract is not None:
+            # The operator briefs the fleet before launch. A later amendment
+            # would have to reach each UAV as evidence, like anything else.
+            for kernel in self.autonomy_kernels.values():
+                kernel.receive_contract(config.mission_contract, 0.0)
         self._ownership_evaluator = OwnershipEvaluator(metrics)
         self._has_run = False
         self._trace_recorder = TraceRecorder(config) if capture_trace else None
+
+    def _all_stood_down(self) -> bool:
+        """Whether every responsive UAV has been contracted to stop."""
+
+        responsive = [
+            agent for agent in self.mission.ordered_agents if agent.responsive
+        ]
+        if not responsive:
+            return False
+        return all(
+            self.autonomy_kernels[agent.agent_id].must_stand_down
+            for agent in responsive
+        )
 
     def _observe_ownership(self, timestamp: float) -> None:
         """Let the evaluator read every replica at once.
@@ -606,6 +624,10 @@ class Simulation:
         intents: list[LocalTaskUtility] = []
         for agent in self.mission.ordered_agents:
             if not agent.responsive or agent.current_task is not None:
+                continue
+            # HOLDING finishes what it owns and takes nothing new; ABORTED and
+            # BRIEFED may not act at all.
+            if not self.autonomy_kernels[agent.agent_id].accepts_new_work:
                 continue
             store = self.task_claim_stores[agent.agent_id]
             if any(
@@ -1188,6 +1210,15 @@ class Simulation:
             self._record_positions(timestamp)
             self.mission.assert_consistent()
 
+            if not self.mission.all_tasks_completed and self._all_stood_down():
+                # Every remaining UAV has been ordered to stand down by the
+                # contract it holds. Nothing can advance, so ending here is
+                # honest; burning the clock to a timeout would only disguise
+                # an operator decision as a simulation limit.
+                LOGGER.info("[CONTRACT] All responsive UAVs stood down; ending mission")
+                self.mission.finish(timestamp, False)
+                self._capture_trace_frame(timestamp)
+                break
             if self.mission.all_tasks_completed:
                 self.mission.finish(timestamp, True)
                 self._capture_trace_frame(timestamp)

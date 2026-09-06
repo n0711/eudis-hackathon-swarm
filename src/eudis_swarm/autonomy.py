@@ -1164,6 +1164,8 @@ class LocalAutonomyKernel:
             for task_id in tasks
         }
         self._coordination = initial_coordination_configuration(initial_timestamp)
+        self._mission_phase = initial_mission_phase_configuration(initial_timestamp)
+        self._contract: MissionContract | None = None
         self._transition_records: list[TransitionRecord] = []
         self._new_remote_evidence = False
 
@@ -1186,6 +1188,42 @@ class LocalAutonomyKernel:
     @property
     def coordination_configuration(self) -> CoordinationConfiguration:
         return self._coordination
+
+    @property
+    def mission_phase(self) -> MissionPhase:
+        return self._mission_phase.state
+
+    @property
+    def contract(self) -> MissionContract | None:
+        """The newest operator intent this UAV has actually received."""
+
+        return self._contract
+
+    @property
+    def contract_version(self) -> int | None:
+        return None if self._contract is None else self._contract.version
+
+    @property
+    def accepts_new_work(self) -> bool:
+        """Whether the contracted posture allows taking on another objective.
+
+        A UAV holding no contract is unconstrained rather than forbidden: the
+        contract only ever *adds* restraint. Once one is held, HOLDING finishes
+        what it owns and takes nothing new, and ABORTED takes nothing at all.
+        """
+
+        if self._contract is None:
+            return True
+        return self._mission_phase.state in (
+            MissionPhase.EXECUTING,
+            MissionPhase.COMPLETE,
+        )
+
+    @property
+    def must_stand_down(self) -> bool:
+        """Whether the contracted posture requires releasing owned work."""
+
+        return self._mission_phase.state is MissionPhase.ABORTED
 
     @property
     def transition_records(self) -> tuple[TransitionRecord, ...]:
@@ -1297,6 +1335,59 @@ class LocalAutonomyKernel:
 
         self._new_remote_evidence = True
 
+    def receive_contract(self, contract: MissionContract, timestamp: float) -> bool:
+        """Accept operator intent, but only if it supersedes what is held.
+
+        Delivery is unreliable and reordered, so an older version arriving late
+        must not roll intent backwards.
+        """
+
+        if not contract.supersedes(self._contract):
+            return False
+        self._contract = contract
+        self._evaluate_mission_phase(timestamp, MissionPhaseEventKind.CONTRACT_RECEIVED)
+        return True
+
+    def evaluate_mission_phase(self, timestamp: float) -> None:
+        self._evaluate_mission_phase(
+            timestamp, MissionPhaseEventKind.LOCAL_EVIDENCE_UPDATED
+        )
+
+    def _evaluate_mission_phase(
+        self, timestamp: float, kind: MissionPhaseEventKind
+    ) -> None:
+        outstanding = sum(
+            configuration.state
+            not in (TaskOwnershipState.COMPLETE, TaskOwnershipState.UNCLAIMED)
+            for configuration in self._tasks.values()
+        )
+        # Participants this UAV can actually account for: itself, plus the
+        # peers it currently holds contact evidence for. Never the fleet size.
+        participants = 1 + sum(
+            configuration.state is not ContactState.LOST
+            for configuration in self._contacts.values()
+        )
+        event = MissionPhaseEvent(
+            kind=kind,
+            timestamp=timestamp,
+            contract=self._contract,
+            coordination_mode=self._coordination.state,
+            participants_known=participants,
+            objectives_outstanding=outstanding,
+        )
+        previous = self._mission_phase
+        result = transition_mission_phase(previous, event)
+        self._mission_phase = MissionPhaseConfiguration(
+            result.next_state, result.next_variables
+        )
+        self._record_change(
+            MachineName.MISSION_PHASE,
+            previous.state,
+            event.kind,
+            result,
+            timestamp,
+        )
+
     def evaluate_coordination(self, timestamp: float) -> None:
         event = CoordinationEvidenceEvent(
             kind=CoordinationEventKind.LOCAL_EVIDENCE_UPDATED,
@@ -1329,6 +1420,8 @@ class LocalAutonomyKernel:
             timestamp,
         )
         self._new_remote_evidence = False
+        # the mission posture depends on the coordination mode just settled
+        self.evaluate_mission_phase(timestamp)
 
     def _apply_contact(self, event: ContactEvent) -> None:
         previous = self._contacts[event.peer_agent_id]

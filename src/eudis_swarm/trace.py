@@ -29,7 +29,7 @@ if TYPE_CHECKING:
     from .mission import Mission
 
 
-TRACE_SCHEMA_VERSION = 4
+TRACE_SCHEMA_VERSION = 5
 
 
 @dataclass(frozen=True, slots=True)
@@ -102,6 +102,10 @@ class TraceAgentState:
     peer_knowledge: tuple[TracePeerKnowledge, ...]
     coordination_mode: str
     contact_states: tuple[TraceContactState, ...]
+    #: This UAV's posture under the operator contract it actually holds.
+    mission_phase: str = "UNAVAILABLE"
+    #: The contract version it holds, which peers may legitimately differ on.
+    contract_version: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -483,6 +487,10 @@ class TraceRecorder:
                 "UNAVAILABLE" if kernel is None else kernel.coordination_mode.value
             ),
             contact_states=contact_states,
+            mission_phase=(
+                "UNAVAILABLE" if kernel is None else kernel.mission_phase.value
+            ),
+            contract_version=None if kernel is None else kernel.contract_version,
         )
 
     @staticmethod
