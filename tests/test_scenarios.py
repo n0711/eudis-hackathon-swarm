@@ -7,7 +7,9 @@ makes each story worth showing rather than merely that it exits zero.
 
 from __future__ import annotations
 
+import re
 from dataclasses import replace
+from pathlib import Path
 
 import pytest
 
@@ -280,3 +282,49 @@ def test_the_two_quorum_floor_presets_differ_only_by_control_mode() -> None:
     assert centralized.pop("task_control") == "centralized"
     assert "task_control" not in distributed
     assert distributed == centralized
+
+
+# --------------------------------------------------------------------------
+# the live-pitch script
+# --------------------------------------------------------------------------
+
+PITCH_SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "pitch-demo.ps1"
+
+
+def _pitch_script_source() -> str:
+    assert PITCH_SCRIPT.is_file(), f"missing pitch script at {PITCH_SCRIPT}"
+    return PITCH_SCRIPT.read_text(encoding="utf-8")
+
+
+def test_the_pitch_script_only_names_scenarios_that_exist() -> None:
+    """A renamed preset must break the build, not the demo."""
+
+    source = _pitch_script_source()
+    named = set(re.findall(r"Scenario\s*=\s*'([a-z0-9-]+)'", source))
+    assert named, "the pitch script names no scenarios"
+    assert named <= set(SCENARIO_PRESETS), sorted(named - set(SCENARIO_PRESETS))
+    assert {"demo-quorum-floor", "baseline-quorum-floor"} <= named
+
+
+def test_the_pitch_script_greps_for_lines_the_summary_actually_emits() -> None:
+    """The script filters output by prefix, and a silent filter looks like success.
+
+    If a summary label is reworded, the script would quietly print nothing on
+    stage rather than failing, so the labels are pinned to the real summary here.
+    """
+
+    source = _pitch_script_source()
+    block = source.split("$keyLines = @(", 1)[1].split(")", 1)[0]
+    key_lines = re.findall(r"'([^']+)'", block)
+    assert len(key_lines) >= 3
+
+    summary = (
+        Simulation(
+            replace(SimulationConfig(), **SCENARIO_PRESETS["demo-quorum-floor"]),  # type: ignore[arg-type]
+        )
+        .run()
+        .metrics.format_summary()
+    )
+
+    for label in key_lines:
+        assert label in summary, f"pitch script greps for absent label: {label!r}"

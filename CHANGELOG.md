@@ -8,6 +8,24 @@ and interfaces change between prototypes.
 ## [Unreleased]
 
 ### Added
+- `docs/threat_context.md`, citing the operating environment the project is
+  aimed at rather than asserting it: EASA currently lists `LCCC NICOSIA` among
+  the FIRs affected by GNSS jamming and spoofing, and Osechas et al.
+  (NAVIGATION 69(2), doi:10.33012/navi.516) measured a chirp jammer in that FIR
+  leaving a receiver without positioning for 80% of the time aloft. The
+  document states as prominently what those sources do *not* support: GNSS
+  denial is not comms jamming, and none of it calibrates this simulator.
+- `docs/vehicle_model.md`, specifying the vehicle and energy work as a
+  self-contained lane, with the constraints it must not break and the questions
+  left deliberately open. Energy depletion is specified to present as ordinary
+  silence, so peers cannot distinguish an exhausted aircraft from a jammed one.
+- `scripts/pitch-demo.ps1`, running both quorum-floor scenarios back to back
+  without requiring an activated environment. Tests assert it names only
+  scenarios that exist and greps only for labels the summary actually emits,
+  because a filter that silently matches nothing looks like success.
+- A regression pinning the comparison view when one run ends long before the
+  other: the finished side must hold its final frame rather than disappear,
+  which is what puts a completed panel beside a still-failing one.
 - `demo-quorum-floor` and `baseline-quorum-floor` presets, reducing the
   project's sharpest result to two commands. Two aircraft, one of which really
   stops: neither control mode can declare the loss, distributed ownership

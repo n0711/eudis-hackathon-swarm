@@ -284,6 +284,46 @@ def test_the_two_runs_align_by_logical_time_not_frame_number() -> None:
                 assert trace.frames[index + 1].timestamp > timestamp + 1e-9
 
 
+def test_a_finished_run_holds_its_last_frame_while_the_other_runs_on() -> None:
+    """The pitch pairing puts a 10.75 s run beside one that never finishes.
+
+    Past the end of the shorter trace there is no frame to advance to, so the
+    completed side must hold its final state rather than disappear or raise.
+    That frozen panel beside a still-advancing one is the whole visual argument,
+    so it is pinned here rather than left to the renderer.
+    """
+
+    finished = (
+        Simulation(
+            replace(SimulationConfig(), **SCENARIO_PRESETS["demo-quorum-floor"]),  # type: ignore[arg-type]
+            capture_trace=True,
+        )
+        .run()
+        .trace
+    )
+    unfinished = (
+        Simulation(
+            replace(SimulationConfig(), **SCENARIO_PRESETS["baseline-quorum-floor"]),  # type: ignore[arg-type]
+            capture_trace=True,
+        )
+        .run()
+        .trace
+    )
+    assert finished is not None and unfinished is not None
+
+    last_finished = finished.frames[-1].timestamp
+    last_unfinished = unfinished.frames[-1].timestamp
+    # The premise of the pairing: one run ends long before the other.
+    assert last_unfinished > last_finished * 2.0
+
+    final_index = len(finished.frames) - 1
+    for timestamp in (last_finished, last_finished + 1.0, last_unfinished):
+        assert aligned_frame_index(finished, timestamp) == final_index
+
+    # Meanwhile the failing run is still producing new frames at those instants.
+    assert aligned_frame_index(unfinished, last_finished) < len(unfinished.frames) - 1
+
+
 def test_an_instant_before_the_first_frame_selects_the_first_frame() -> None:
     trace = (
         Simulation(

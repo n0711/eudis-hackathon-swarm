@@ -35,6 +35,9 @@ eudis-swarm --scenario demo-quorum-floor      # distributed ownership
 eudis-swarm --scenario baseline-quorum-floor  # central coordinator
 ```
 
+On Windows, `scripts/pitch-demo.ps1` runs both back to back and needs no
+activated environment; it calls the interpreter in `.venv` directly.
+
 | | declared | never detected | tasks | mission |
 | --- | ---: | ---: | ---: | --- |
 | distributed ownership | 0 | 1 | **3/3** | completed at 10.75 s |
@@ -634,6 +637,8 @@ eudis-swarm/
 ├── tests/                      # peer state, failure detection, task claims/ownership,
 │   │                           #   communication graph, transport, integration, packaging
 │   └── ...
+├── scripts/
+│   └── pitch-demo.ps1                     # runs both quorum-floor scenarios, no activation needed
 ├── docs/
 │   ├── measured_results.md                # reproducible sweep results, and their stated limits
 │   ├── threat_context.md                  # cited GNSS interference context, and what it does not show
