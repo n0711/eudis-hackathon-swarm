@@ -628,8 +628,10 @@ eudis-swarm/
 │   │                           #   communication graph, transport, integration, packaging
 │   └── ...
 ├── docs/
+│   ├── measured_results.md                # reproducible sweep results, and their stated limits
 │   ├── distributed_state_foundation.md   # state boundary, EFSM, quorum, leases, reconciliation
 │   ├── autonomy_efsm.md                   # generated transition tables + composition/locality rules
+│   ├── vehicle_model.md                   # open lane: kinematics, energy, calibration
 │   ├── prior_art.md                       # evidence-bounded research/industrial comparison
 │   ├── prototype_0_1.md … prototype_0_3a.md
 │   ├── visualization_layer.md
