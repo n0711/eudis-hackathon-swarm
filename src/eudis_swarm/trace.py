@@ -29,7 +29,7 @@ if TYPE_CHECKING:
     from .mission import Mission
 
 
-TRACE_SCHEMA_VERSION = 3
+TRACE_SCHEMA_VERSION = 4
 
 
 @dataclass(frozen=True, slots=True)
@@ -177,6 +177,10 @@ class TraceMetrics:
     protocol_duplicate_source_publications: int = 0
     protocol_duplicate_route_suppressions: int = 0
     protocol_inactive_endpoint_deferrals: int = 0
+    # Evaluator-computed ground truth, running total at this frame. No UAV can
+    # observe this: it compares every replica's private store at one instant.
+    concurrent_ownership_duration: float = 0.0
+    dropped_ownership_time: float = 0.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -367,6 +371,10 @@ class TraceRecorder:
                 messages_delivered=mission.metrics.peer_messages_delivered,
                 messages_dropped=mission.metrics.peer_messages_undelivered,
                 allocation_policy=mission.metrics.allocation_policy,
+                concurrent_ownership_duration=(
+                    mission.metrics.concurrent_ownership_duration
+                ),
+                dropped_ownership_time=mission.metrics.dropped_ownership_time,
                 protocol_messages_attempted=(
                     mission.metrics.protocol_messages_attempted
                 ),

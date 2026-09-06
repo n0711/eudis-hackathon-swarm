@@ -10,7 +10,7 @@ import argparse
 import logging
 import math
 import random
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Mapping, Sequence
 
 from . import __version__
@@ -1226,6 +1226,26 @@ def run_simulation(
     return Simulation(config or SimulationConfig(), capture_trace=capture_trace).run()
 
 
+SCENARIO_PRESETS: dict[str, dict[str, object]] = {
+    # The preserved Prototype 0.1 story: everything connected, one UAV really
+    # dies, and the quorum notices.
+    "demo-failstop": {
+        "communication_range": 130.0,
+        "failure_agent_id": 2,
+        "failure_time": 4.0,
+    },
+    # A balanced two-component split that heals before the mission ends. The
+    # jammer geometry is measured, not guessed: at range 50 this produces
+    # exactly two components of two UAVs each from t=3.75 to t=7.25, and the
+    # network is connected again by the final frame.
+    "demo-partition": {
+        "communication_range": 50.0,
+        "region_jammer": RegionJammer(40.0, 50.0, 15.0, 3.0, 8.0),
+        "failure_time": 1000.0,
+    },
+}
+
+
 def configure_logging(level: str = "INFO") -> None:
     logging.basicConfig(level=level, format="%(message)s", force=True)
 
@@ -1288,6 +1308,13 @@ def _parser() -> argparse.ArgumentParser:
         default=None,
         metavar="A:B",
         help="permanently block the undirected link between UAVs A and B (repeatable)",
+    )
+    parser.add_argument(
+        "--scenario",
+        choices=sorted(SCENARIO_PRESETS),
+        default=None,
+        help="run a named demonstration scenario; the preset's own settings "
+        "override the matching command-line options",
     )
     parser.add_argument(
         "--jammer",
@@ -1391,6 +1418,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             comm_fault_start=arguments.comm_fault_start,
             comm_fault_end=arguments.comm_fault_end,
         )
+        if arguments.scenario is not None:
+            config = replace(config, **SCENARIO_PRESETS[arguments.scenario])
     except ValueError as error:
         parser.error(str(error))
 

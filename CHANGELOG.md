@@ -8,6 +8,20 @@ and interfaces change between prototypes.
 ## [Unreleased]
 
 ### Added
+- `--scenario` presets so each demonstration is one command: `demo-failstop`
+  (range 130, UAV 2 dies at t=4, quorum detects it) and `demo-partition`
+  (range 50, a region jammer that splits the swarm into two components of two
+  UAVs each from t=3.75 to t=7.25 and heals before the mission ends). The
+  jammer geometry was searched for rather than guessed. A preset overrides the
+  matching command-line options and leaves the defaults untouched.
+- Playback trace schema version 4, carrying the running
+  `concurrent_ownership_duration` and `dropped_ownership_time` per frame so a
+  viewer can show wasted work accumulating, labelled as evaluator-computed
+  ground truth.
+- An architecture test that fails if the dashboard modules import `Mission`,
+  `Simulation`, `Agent` or any other module carrying authoritative world
+  state, enforcing structurally that belief panels are reconstructed only from
+  recorded per-agent trace fields.
 - Evaluator-side wasted-work measurement in `eudis_swarm.evaluation`, reading
   every replica's private claim store at one instant -- a comparison no UAV can
   make. `concurrent_ownership_duration` integrates the number of tasks two or
