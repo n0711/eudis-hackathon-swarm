@@ -490,7 +490,7 @@ def _peer_panel(frame: TraceFrame, selected_agent_id: int) -> None:
                 else f"({position[0]:.1f}, {position[1]:.1f})",
             }
         )
-    st.dataframe(rows, hide_index=True, use_container_width=True)
+    st.dataframe(rows, hide_index=True, width="stretch")
 
 
 def _ownership_panel(frame: TraceFrame) -> None:
@@ -534,7 +534,7 @@ def _ownership_panel(frame: TraceFrame) -> None:
                 observer_agent_id, "—"
             )
         rows.append(row)
-    st.dataframe(rows, hide_index=True, use_container_width=True)
+    st.dataframe(rows, hide_index=True, width="stretch")
 
 
 def _transition_panel(frame: TraceFrame) -> None:
@@ -559,7 +559,7 @@ def _transition_panel(frame: TraceFrame) -> None:
             for transition in frame.transitions
         ],
         hide_index=True,
-        use_container_width=True,
+        width="stretch",
     )
 
 
@@ -654,8 +654,12 @@ def _load_comparison_traces() -> tuple[SimulationTrace | None, SimulationTrace |
     """Load the two traces the side-by-side view compares."""
 
     st.sidebar.header("Comparison traces")
-    left_path = st.sidebar.text_input("Left (centralised) trace", value="left.json")
-    right_path = st.sidebar.text_input("Right (distributed) trace", value="right.json")
+    left_path = st.sidebar.text_input(
+        "Left (centralised) trace", value="left.trace.json"
+    )
+    right_path = st.sidebar.text_input(
+        "Right (distributed) trace", value="right.trace.json"
+    )
     loaded: list[SimulationTrace | None] = []
     for label, path in (("left", left_path), ("right", right_path)):
         try:
@@ -698,8 +702,8 @@ def render_dashboard() -> None:
         left, right = _load_comparison_traces()
         if left is None or right is None:
             st.code(
-                "eudis-swarm --scenario baseline --record-trace left.json\n"
-                "eudis-swarm --scenario demo-partition --record-trace right.json"
+                "eudis-swarm --scenario baseline --record-trace left.trace.json\n"
+                "eudis-swarm --scenario demo-partition --record-trace right.trace.json"
             )
             return
         render_comparison(left, right)
@@ -733,22 +737,22 @@ def render_dashboard() -> None:
             st.columns(6)
         )
         current_index = int(st.session_state.frame_index)
-        if previous_event.button("◀ Event", use_container_width=True):
+        if previous_event.button("◀ Event", width="stretch"):
             prior = [
                 index
                 for index, frame in enumerate(trace.frames)
                 if (frame.events or frame.transitions) and index < current_index
             ]
             st.session_state.frame_index = prior[-1] if prior else 0
-        if previous_frame.button("◀ Frame", use_container_width=True):
+        if previous_frame.button("◀ Frame", width="stretch"):
             st.session_state.frame_index = max(0, current_index - 1)
-        if play.button("▶ Play", use_container_width=True):
+        if play.button("▶ Play", width="stretch"):
             st.session_state.playing = True
-        if pause.button("Ⅱ Pause", use_container_width=True):
+        if pause.button("Ⅱ Pause", width="stretch"):
             st.session_state.playing = False
-        if next_frame.button("Frame ▶", use_container_width=True):
+        if next_frame.button("Frame ▶", width="stretch"):
             st.session_state.frame_index = min(len(trace.frames) - 1, current_index + 1)
-        if next_event.button("Event ▶", use_container_width=True):
+        if next_event.button("Event ▶", width="stretch"):
             following = [
                 index
                 for index, frame in enumerate(trace.frames)
@@ -800,7 +804,7 @@ def render_dashboard() -> None:
                 show_links=show_links,
                 inspected_agent_id=selected_agent_id,
             ),
-            use_container_width=True,
+            width="stretch",
             config={"displaylogo": False},
         )
         with status_column:
@@ -810,7 +814,7 @@ def render_dashboard() -> None:
         network_column, decision_column = st.columns([2.05, 1])
         network_column.plotly_chart(
             _network_figure(frame),
-            use_container_width=True,
+            width="stretch",
             config={"displaylogo": False},
         )
         with decision_column:
@@ -828,7 +832,7 @@ def render_dashboard() -> None:
                 trace.metadata.duration,
                 frame.timestamp,
             ),
-            use_container_width=True,
+            width="stretch",
             config={"displaylogo": False},
         )
 
@@ -861,7 +865,7 @@ def render_dashboard() -> None:
                 for activity in reversed(visible_activities[-100:])
             ],
             hide_index=True,
-            use_container_width=True,
+            width="stretch",
         )
 
     if st.session_state.playing:
@@ -1089,7 +1093,7 @@ def _comparison_side(
             show_links=True,
             inspected_agent_id=frame.agents[0].agent_id,
         ),
-        use_container_width=True,
+        width="stretch",
         key=f"{key}-map",
     )
     _belief_panel(frame)
