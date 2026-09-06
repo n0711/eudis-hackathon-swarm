@@ -119,7 +119,7 @@ def test_stale_peer_state_under_the_connectivity_policy_still_loses_the_uav() ->
     assert result.mission.agents[2].responsive is True
     assert result.mission.agents[2].wrongly_declared is False
     assert result.mission.agents[2].failure_injected_at is None
-    assert result.metrics.duplicated_task_completion_count == 0
+    assert result.metrics.redundant_completion_count == 0
     event_kinds = {event.kind for event in result.mission.events}
     assert MissionEventKind.FAILURE_DECLARED in event_kinds
     assert MissionEventKind.TASK_REASSIGNED not in event_kinds

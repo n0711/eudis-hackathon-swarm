@@ -8,6 +8,17 @@ and interfaces change between prototypes.
 ## [Unreleased]
 
 ### Added
+- Evaluator-side wasted-work measurement in `eudis_swarm.evaluation`, reading
+  every replica's private claim store at one instant -- a comparison no UAV can
+  make. `concurrent_ownership_duration` integrates the number of tasks two or
+  more UAVs simultaneously believe they own; `abandoned_task_time` integrates
+  unowned incomplete work; `dropped_ownership_time` is the discriminating
+  subset counting only tasks somebody owned and then let go, since abandoned
+  time is otherwise dominated by queue depth; `contested_duration` integrates
+  visible contests. Totals, per-task breakdowns and worst-offender lines appear
+  in the mission summary, labelled as evaluator-computed ground truth.
+- `eudis-swarm-sweep`, a deterministic parameter sweep emitting one CSV row per
+  (parameter value, seed). The same seeds reproduce byte-identical output.
 - `physically_failed_count` and `undetected_failure_count` metrics, separating
   aircraft that actually stopped from aircraft the swarm managed to declare. The
   mission summary now reports both plus "Losses never detected".
@@ -105,6 +116,10 @@ and interfaces change between prototypes.
   completion without authoritative ownership fields.
 
 ### Changed
+- `duplicated_task_completion_count` is renamed `redundant_completion_count`
+  and its summary line "Duplicated completions" becomes "Redundant
+  completions". It counts completions of already-complete work: a real but
+  rare event, and not the same thing as wasted flight time.
 
 - Heartbeat creation no longer records authoritative source state directly in a
   centralized failure cache. Heartbeats remain one-hop observations; failure

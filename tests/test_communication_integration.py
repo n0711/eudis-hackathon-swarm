@@ -424,7 +424,7 @@ def test_a_wrongly_declared_uav_keeps_locally_authorized_work() -> None:
     assert metrics.reassigned_task_count == 0
 
     # Completion evidence, rather than coordinator belief, is authoritative.
-    assert metrics.duplicated_task_completion_count == 0
+    assert metrics.redundant_completion_count == 0
     stood_down = [
         event
         for event in result.mission.events
@@ -451,7 +451,7 @@ def test_a_physically_dead_uav_stops_and_releases_its_work() -> None:
 
     # a real failure produces no divergence and no duplicated effort.
     assert metrics.belief_divergence_event_count == 0
-    assert metrics.duplicated_task_completion_count == 0
+    assert metrics.redundant_completion_count == 0
     assert metrics.simulation_duration == 17.25
     assert metrics.completed_task_count == 20
 

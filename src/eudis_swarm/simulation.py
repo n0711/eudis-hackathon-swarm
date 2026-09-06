@@ -22,6 +22,7 @@ from .autonomy import (
 )
 from .communication import CommunicationGraph, CommunicationUpdate, RegionJammer
 from .config import SimulationConfig
+from .evaluation import OwnershipEvaluator
 from .failure_manager import FailureDeclaration, FailureManager
 from .messaging import (
     DeliveryBatch,
@@ -260,8 +261,20 @@ class Simulation:
         self._blocked_communication_agents: set[int] = set()
         self._last_communication_update: float | None = None
         self._last_communication_event: float | None = None
+        self._ownership_evaluator = OwnershipEvaluator(metrics)
         self._has_run = False
         self._trace_recorder = TraceRecorder(config) if capture_trace else None
+
+    def _observe_ownership(self, timestamp: float) -> None:
+        """Let the evaluator read every replica at once.
+
+        This is deliberately outside the swarm: it compares private stores that
+        no UAV can see together, so it can never feed a decision.
+        """
+
+        self._ownership_evaluator.observe(
+            timestamp, self.task_claim_stores, self.mission.tasks
+        )
 
     def _capture_trace_frame(
         self,
@@ -1045,6 +1058,7 @@ class Simulation:
         self.mission.assert_consistent()
         if self.mission.all_tasks_completed:
             self.mission.finish(0.0, True)
+        self._observe_ownership(0.0)
         self._capture_trace_frame(0.0)
 
         while (
@@ -1161,6 +1175,7 @@ class Simulation:
                 # Completion evidence is seeded before the finish check, and
                 # newly idle UAVs select another intent at the same timestamp.
                 self._exchange_claim_evidence(timestamp)
+            self._observe_ownership(timestamp)
             self._record_positions(timestamp)
             self.mission.assert_consistent()
 
@@ -1176,6 +1191,10 @@ class Simulation:
         if not self.mission.finished:
             self.mission.finish(current_time, False)
             self._capture_trace_frame(current_time)
+
+        end_time = self.mission.metrics.end_time
+        if end_time is not None:
+            self._ownership_evaluator.finish(end_time)
 
         trace = (
             None

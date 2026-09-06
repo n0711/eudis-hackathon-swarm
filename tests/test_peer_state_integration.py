@@ -44,7 +44,7 @@ def test_outage_stales_peer_views_without_revoking_local_claims() -> None:
     assert isolated_agent.failure_injected_at is None
     assert isolated_agent.responsive is True
     assert metrics.belief_divergence_event_count == 0
-    assert metrics.duplicated_task_completion_count == 0
+    assert metrics.redundant_completion_count == 0
 
     assert metrics.peer_messages_attempted == 156
     assert metrics.peer_messages_delivered == 132

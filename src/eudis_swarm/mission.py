@@ -625,7 +625,7 @@ class Mission:
             store.create_completion(task_id, timestamp)
             agent.complete_task(task_id)
             if task.status is TaskStatus.COMPLETED:
-                self.metrics.duplicated_task_completion_count += 1
+                self.metrics.redundant_completion_count += 1
                 self._event(
                     MissionEventKind.TASK_DUPLICATED,
                     timestamp,
@@ -663,7 +663,7 @@ class Mission:
             # the coordinator believes this UAV is dead and cannot hear it, so
             # the effort is real but invisible: duplicated, not completed.
             agent.release_task(task_id)
-            self.metrics.duplicated_task_completion_count += 1
+            self.metrics.redundant_completion_count += 1
             self._event(
                 MissionEventKind.TASK_DUPLICATED,
                 timestamp,

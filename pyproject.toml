@@ -55,6 +55,7 @@ dashboard = [
 [project.scripts]
 eudis-swarm = "eudis_swarm.simulation:main"
 eudis-swarm-dashboard = "eudis_swarm.dashboard:main"
+eudis-swarm-sweep = "eudis_swarm.sweep:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

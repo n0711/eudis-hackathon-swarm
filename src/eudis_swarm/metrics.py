@@ -49,7 +49,11 @@ class SimulationMetrics:
     end_time: float | None = None
     mission_completed: bool = False
     human_interventions: int = 0
-    duplicated_task_completion_count: int = 0
+    redundant_completion_count: int = 0
+    concurrent_ownership_duration: float = 0.0
+    abandoned_task_time: float = 0.0
+    dropped_ownership_time: float = 0.0
+    contested_duration: float = 0.0
     belief_divergence_event_count: int = 0
     declaration_retraction_count: int = 0
     claim_refused_allocation_count: int = 0
@@ -63,6 +67,10 @@ class SimulationMetrics:
     allocation_decisions: list[AllocationRecord] = field(default_factory=list)
     completed_task_ids: set[int] = field(default_factory=set)
     reinstated_agent_ids: set[int] = field(default_factory=set)
+    concurrent_ownership_by_task: dict[int, float] = field(default_factory=dict)
+    abandoned_time_by_task: dict[int, float] = field(default_factory=dict)
+    dropped_time_by_task: dict[int, float] = field(default_factory=dict)
+    contested_duration_by_task: dict[int, float] = field(default_factory=dict)
     failures: dict[int, FailureRecord] = field(default_factory=dict)
     recoveries: dict[int, RecoveryRecord] = field(default_factory=dict)
     initial_link_count: int | None = None
@@ -460,6 +468,19 @@ class SimulationMetrics:
     def _mean_or_na(values: list[float]) -> str:
         return "N/A" if not values else f"{fmean(values):.2f} s"
 
+    def _worst_offender_lines(self, limit: int = 3) -> list[str]:
+        """Name the tasks that soaked up the most concurrent ownership."""
+
+        if not self.concurrent_ownership_by_task:
+            return []
+        worst = sorted(
+            self.concurrent_ownership_by_task.items(),
+            key=lambda item: (-item[1], item[0]),
+        )[:limit]
+        return ["Worst concurrently owned tasks:"] + [
+            f"  Task {task_id}: {duration:.2f} s" for task_id, duration in worst
+        ]
+
     def format_summary(self) -> str:
         """Build the concise terminal result block from recorded values."""
 
@@ -478,13 +499,23 @@ class SimulationMetrics:
             f"Belief divergences: {self.belief_divergence_event_count}",
             f"Declarations retracted: {self.declaration_retraction_count}",
             f"Contested tasks yielded: {self.contested_task_yield_count}",
-            f"Duplicated completions: {self.duplicated_task_completion_count}",
+            f"Redundant completions: {self.redundant_completion_count}",
             f"Simulation duration: {self.simulation_duration:.2f} s",
             "Failure detection latency: "
             + self._mean_or_na(list(self.failure_detection_latencies.values())),
             "Task reassignment latency: "
             + self._mean_or_na(list(self.task_reassignment_latencies.values())),
             f"Human interventions: {self.human_interventions}",
+            "",
+            "WASTED AND ABANDONED WORK (evaluator-computed ground truth;",
+            "no UAV can observe these)",
+            "Concurrent ownership: "
+            f"{self.concurrent_ownership_duration:.2f} task-seconds",
+            f"Abandoned task time: {self.abandoned_task_time:.2f} task-seconds"
+            " (includes never-started backlog)",
+            f"Dropped-ownership time: {self.dropped_ownership_time:.2f} task-seconds",
+            f"Contested duration: {self.contested_duration:.2f} task-seconds",
+            *self._worst_offender_lines(),
         ]
         if self._communication_initialized:
             lines.extend(
