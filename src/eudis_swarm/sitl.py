@@ -72,6 +72,7 @@ class SitlVehicle:
         self._frame: LocalFrame | None = None
         self._position: Position = (0.0, 0.0)
         self._altitude_m = 0.0
+        self._vehicle_time_s = 0.0
 
     @property
     def connected(self) -> bool:
@@ -92,6 +93,17 @@ class SitlVehicle:
     @property
     def altitude_m(self) -> float:
         return self._altitude_m
+
+    @property
+    def vehicle_time_s(self) -> float:
+        """Seconds on the autopilot's own clock, from its last position report.
+
+        Not wall-clock. SITL is routinely run faster than real time, and under
+        ``--speedup 10`` a wall-clock stopwatch reports a 60 m leg taking one
+        second. Any timing measured against this vehicle must use this clock.
+        """
+
+        return self._vehicle_time_s
 
     def connect(self) -> None:
         """Open the link, ask for telemetry, and pin the local frame origin."""
@@ -143,6 +155,7 @@ class SitlVehicle:
             self._frame = LocalFrame(latitude, longitude)
         self._position = self._frame.to_local((latitude, longitude))
         self._altitude_m = message.relative_alt / 1000.0
+        self._vehicle_time_s = message.time_boot_ms / 1000.0
         return True
 
     def observe(self, duration: float = 0.0) -> Position:

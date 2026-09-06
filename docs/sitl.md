@@ -138,6 +138,56 @@ Two things worth recording from doing it:
   difference between a point mass and an aircraft, and it is the first thing
   phase 3 measures.
 
+## Phase 3: how wrong is the motion model?
+
+The planner predicts motion with `advance_point_mass`: constant speed, instant
+acceleration, exact arrival. Flying the same 60 m leg repeatedly under
+ArduCopter SITL, with the model given the autopilot's own 10 m/s so it gets its
+best case:
+
+```bash
+./scripts/sitl-copter.sh                                    # in WSL
+python scripts/sitl_model_error.py tcp:<wsl-ip>:5760 --legs 6
+```
+
+| | min | max | mean |
+| --- | ---: | ---: | ---: |
+| Times longer than the model predicts | 1.53 | 1.76 | **1.71** |
+| Worst position error during the leg (m) | 25.25 | 37.26 | **34.43** |
+| Arrival error (m) | 1.40 | 1.99 | 1.67 |
+
+**The model is wrong by more than half a leg length, at the worst possible
+moment.** Peak divergence lands at 5.8 s on a leg the model says takes 5.8 s:
+the predicted aircraft has arrived and stopped while the real one is still
+decelerating a third of the way back. Error is smallest at the start and end,
+and largest exactly where a planner would be reading it.
+
+### Why this matters to allocation, not just to realism
+
+`Simulation._project_positions` is not decoration. The connectivity-aware
+allocation policy uses it to choose assignments: it projects where aircraft
+would be and evaluates the resulting link graph. That projection is the same
+`advance_point_mass`.
+
+So a connectivity-aware decision is taken on a picture that, against real
+firmware, is wrong by ~34 m on a 60 m leg — and wrong in a *biased* direction,
+since the model always believes the aircraft is further along than it is. A
+policy choosing assignments to preserve connectivity is therefore evaluating a
+link graph for positions no aircraft will occupy.
+
+That is a finding about this simulator's own allocator, and the pure simulator
+could not have produced it: with one motion model there is nothing to disagree
+with.
+
+### What this measurement is not
+
+Six legs on one vehicle, one airframe, one speed, one leg length. The spread
+above is reported as a range rather than a mean-with-error because **SITL is not
+reproducible**: the same commands give 1.53 and 1.76 on different legs of the
+same flight. That is the reason these numbers live here and not in
+[`measured_results.md`](measured_results.md), and the reason no coordination
+claim rests on them.
+
 ## Phases
 
 Each phase ends somewhere useful, so the work can stop at any boundary without
@@ -153,7 +203,7 @@ extra, one aircraft flying to commanded waypoints under `MavlinkBackend`, with
 the coordination layer untouched. Deliverable: a recording of one UAV completing
 one task against real firmware.
 
-**Phase 3 — measure the model error.** Fly the same scenario on both backends
+**Phase 3 — measure the model error.** *(done)* Fly the same scenario on both backends
 and record the divergence between predicted and actual position over time. This
 is the first result SITL produces that the pure simulator could not.
 

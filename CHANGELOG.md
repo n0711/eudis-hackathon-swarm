@@ -8,6 +8,20 @@ and interfaces change between prototypes.
 ## [Unreleased]
 
 ### Added
+- **The motion model measured against real firmware.**
+  `scripts/sitl_model_error.py` flies a leg repeatedly under ArduCopter SITL and
+  compares each sample against what `advance_point_mass` said would be there.
+  The vehicle takes 1.71x longer than the model predicts, and peak divergence --
+  34 m on a 60 m leg -- lands exactly when the model says the aircraft has
+  arrived and stopped. Reported as a range rather than a mean because SITL is
+  not reproducible, and kept out of `measured_results.md` for the same reason.
+  The consequence is not cosmetic: the connectivity-aware allocator chooses
+  assignments from that projection, so it evaluates link graphs for positions no
+  aircraft will occupy.
+- `SitlVehicle.vehicle_time_s`, the autopilot's own clock. SITL is routinely run
+  faster than real time, and a wall-clock stopwatch reports a 60 m leg taking
+  one second under `--speedup 10`. The first version of the experiment measured
+  exactly that and produced nonsense.
 - **Software in the loop, flying.** `eudis_swarm.sitl.SitlVehicle` commands a
   real ArduPilot instance in the simulator's own local metres. An ArduCopter
   SITL vehicle armed, climbed to 20 m and flew a three-waypoint circuit,

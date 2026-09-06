@@ -81,6 +81,18 @@ def test_a_fresh_vehicle_is_not_connected() -> None:
     assert vehicle.position == (0.0, 0.0)
 
 
+def test_the_vehicle_reports_its_own_clock_not_this_machines() -> None:
+    """Timing against SITL must use the autopilot's clock.
+
+    SITL is routinely run faster than real time. Under --speedup 10 a
+    wall-clock stopwatch reports a 60 m leg taking one second, which is how the
+    first version of the model-error experiment produced nonsense.
+    """
+
+    vehicle = SitlVehicle("tcp:127.0.0.1:5760")
+    assert vehicle.vehicle_time_s == 0.0
+
+
 def test_commanding_before_connecting_says_so() -> None:
     vehicle = SitlVehicle("tcp:127.0.0.1:5760")
     with pytest.raises(RuntimeError, match="not connected"):
