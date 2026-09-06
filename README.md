@@ -15,6 +15,35 @@ Every result below is reproducible from a fixed command line. There is no
 wall-clock time, no unseeded randomness, and no order-dependent iteration in the
 simulator, so the same commands produce the same numbers on any machine.
 
+## The result in two commands
+
+Declaring a UAV failed requires a quorum, and the threshold guarantees that one
+observer can never declare a peer dead. With two aircraft the survivor **is**
+the only observer, so the loss can never be declared at all. Both control modes
+are then equally blind — what differs is whether recovery needed the
+declaration.
+
+```bash
+eudis-swarm --scenario demo-quorum-floor      # distributed ownership
+eudis-swarm --scenario baseline-quorum-floor  # central coordinator
+```
+
+| | declared | never detected | tasks | mission |
+| --- | ---: | ---: | ---: | --- |
+| distributed ownership | 0 | 1 | **3/3** | completed at 10.75 s |
+| central coordinator | 0 | 1 | 2/3 | **never finishes** |
+
+The two presets differ by exactly one setting, asserted by test. Central
+reassignment waits for a declaration that cannot arrive, so it holds a task
+assigned to an aircraft that has stopped. Distributed ownership recovers
+through lease expiry, which requires no agreement at all.
+
+**Consensus-free recovery keeps working in exactly the conditions that make
+consensus impossible.** A third aircraft restores the quorum and both modes
+recover, which confirms the floor is about witness count rather than about the
+control model. Full tables and limits:
+[`docs/measured_results.md`](docs/measured_results.md).
+
 [![CI](https://github.com/n0711/eudis-swarm/actions/workflows/ci.yml/badge.svg)](https://github.com/n0711/eudis-swarm/actions/workflows/ci.yml)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue)](https://www.python.org/downloads/)
 [![Coverage gate 85%](https://img.shields.io/badge/coverage%20gate-85%25-brightgreen)](#verification)

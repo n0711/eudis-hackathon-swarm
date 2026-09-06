@@ -118,6 +118,13 @@ The quorum threshold is `max(2, floor((N - 1) / 2) + 1)`, so one observer can
 never declare a peer failed. With two aircraft that makes failure permanently
 undeclarable: the survivor is the only witness.
 
+Reproduce both halves directly:
+
+```bash
+eudis-swarm --scenario demo-quorum-floor      # distributed: 3/3
+eudis-swarm --scenario baseline-quorum-floor  # centralized: 2/3, never finishes
+```
+
 Found by a robustness sweep over 432 configurations, which produced no crashes
 but 108 incomplete missions — every one of them centralized, none distributed.
 

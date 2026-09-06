@@ -8,6 +8,14 @@ and interfaces change between prototypes.
 ## [Unreleased]
 
 ### Added
+- `demo-quorum-floor` and `baseline-quorum-floor` presets, reducing the
+  project's sharpest result to two commands. Two aircraft, one of which really
+  stops: neither control mode can declare the loss, distributed ownership
+  completes 3/3 at 10.75 s, and central control holds a task assigned to a
+  stopped aircraft and never finishes. The presets differ by exactly one
+  setting, asserted by test.
+- The README now leads with that result rather than with an architecture
+  summary.
 - `MissionContractTransport`, flooding amendments of operator intent across
   active links with the same deterministic store-and-forward gossip used for
   ownership evidence. A partition therefore does to intent exactly what it

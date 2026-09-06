@@ -14,6 +14,13 @@ import pytest
 from eudis_swarm.config import SimulationConfig
 from eudis_swarm.simulation import SCENARIO_PRESETS, Simulation, _parser, main
 
+#: Presets that deliberately fail. `baseline-quorum-floor` exists to show a
+#: mission that cannot finish because recovery waits on a declaration that can
+#: never arrive; asserting it completes would erase the point of it.
+EXPECTED_TO_FAIL = frozenset({"baseline-quorum-floor"})
+
+COMPLETING_PRESETS = sorted(set(SCENARIO_PRESETS) - EXPECTED_TO_FAIL)
+
 
 def _config(name: str) -> SimulationConfig:
     return replace(SimulationConfig(), **SCENARIO_PRESETS[name])  # type: ignore[arg-type]
@@ -26,12 +33,22 @@ def test_every_preset_names_real_configuration_fields(name: str) -> None:
     assert set(SCENARIO_PRESETS[name]) <= fields
 
 
-@pytest.mark.parametrize("name", sorted(SCENARIO_PRESETS))
+@pytest.mark.parametrize("name", COMPLETING_PRESETS)
 def test_every_preset_completes_its_mission(name: str) -> None:
     metrics = Simulation(_config(name)).run().metrics
 
     assert metrics.mission_completed is True
     assert metrics.completed_task_count == metrics.total_task_count
+
+
+@pytest.mark.parametrize("name", sorted(EXPECTED_TO_FAIL))
+def test_a_deliberately_failing_preset_really_does_fail(name: str) -> None:
+    """If this ever passes, the demonstration has silently stopped working."""
+
+    metrics = Simulation(_config(name)).run().metrics
+
+    assert metrics.mission_completed is False
+    assert metrics.completed_task_count < metrics.total_task_count
 
 
 def test_the_failstop_preset_actually_loses_and_detects_an_aircraft() -> None:
@@ -109,9 +126,16 @@ def test_an_unknown_scenario_is_rejected() -> None:
         _parser().parse_args(["--scenario", "not-a-scenario"])
 
 
-@pytest.mark.parametrize("name", sorted(SCENARIO_PRESETS))
+@pytest.mark.parametrize("name", COMPLETING_PRESETS)
 def test_the_cli_runs_each_preset(name: str) -> None:
     assert main(["--scenario", name, "--log-level", "ERROR"]) == 0
+
+
+@pytest.mark.parametrize("name", sorted(EXPECTED_TO_FAIL))
+def test_the_cli_reports_a_failed_mission_as_exit_one(name: str) -> None:
+    """The exit code has to carry the outcome, not just the log."""
+
+    assert main(["--scenario", name, "--log-level", "ERROR"]) == 1
 
 
 def test_a_preset_overrides_the_matching_command_line_option() -> None:
@@ -220,3 +244,39 @@ def test_the_amendment_preset_diverges_intent_and_then_converges() -> None:
     }
     assert result.metrics.mission_completed is True
     assert result.metrics.completed_task_count == 20
+
+
+def test_the_quorum_floor_presets_are_the_finding_in_two_commands() -> None:
+    """The sharpest result in the project, reduced to a pair of runs.
+
+    Two aircraft, one of which really stops. The quorum threshold means one
+    survivor is one witness, so neither mode can declare the loss. What differs
+    is whether recovery needed the declaration.
+    """
+
+    recovers = Simulation(_config("demo-quorum-floor")).run().metrics
+    strands = Simulation(_config("baseline-quorum-floor")).run().metrics
+
+    # both are equally blind
+    for metrics in (recovers, strands):
+        assert metrics.physically_failed_count == 1
+        assert metrics.failed_agent_count == 0
+        assert metrics.undetected_failure_count == 1
+
+    # only one of them finishes the work
+    assert recovers.mission_completed is True
+    assert recovers.completed_task_count == 3
+
+    assert strands.mission_completed is False
+    assert strands.completed_task_count == 2
+
+
+def test_the_two_quorum_floor_presets_differ_only_by_control_mode() -> None:
+    """A comparison is only fair if nothing else moved."""
+
+    distributed = dict(SCENARIO_PRESETS["demo-quorum-floor"])
+    centralized = dict(SCENARIO_PRESETS["baseline-quorum-floor"])
+
+    assert centralized.pop("task_control") == "centralized"
+    assert "task_control" not in distributed
+    assert distributed == centralized

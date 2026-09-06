@@ -1360,6 +1360,28 @@ SCENARIO_PRESETS: dict[str, dict[str, object]] = {
         "contract_amendment_time": 6.0,
         "contract_amendment_agent_id": 1,
     },
+    # Two aircraft, one of which really dies. The quorum threshold means one
+    # survivor is one witness, so the loss can never be declared. Distributed
+    # ownership recovers anyway, through lease expiry, which needs no agreement.
+    "demo-quorum-floor": {
+        "agent_count": 2,
+        "task_count": 3,
+        "communication_range": 130.0,
+        "failure_agent_id": 2,
+        "failure_time": 4.0,
+        "max_simulation_time": 40.0,
+    },
+    # The same loss under central control, which waits for a declaration that
+    # cannot arrive and therefore never finishes.
+    "baseline-quorum-floor": {
+        "agent_count": 2,
+        "task_count": 3,
+        "communication_range": 130.0,
+        "failure_agent_id": 2,
+        "failure_time": 4.0,
+        "max_simulation_time": 40.0,
+        "task_control": "centralized",
+    },
     "baseline": {
         "communication_range": 50.0,
         "region_jammer": RegionJammer(40.0, 50.0, 15.0, 3.0, 8.0),
