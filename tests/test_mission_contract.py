@@ -594,3 +594,112 @@ def test_the_trace_records_each_uav_phase_and_contract_version() -> None:
     assert versions == {3}, "every UAV was briefed with the same version"
     assert MissionPhase.EXECUTING.value in phases
     assert MissionPhase.HOLDING.value in phases
+
+
+# --------------------------------------------------------------------------
+# amendments propagate as evidence, and can diverge
+# --------------------------------------------------------------------------
+
+
+def _amended_run(amend_at: float, *, capture: bool = True):
+    from dataclasses import replace as _replace
+
+    from eudis_swarm.config import SimulationConfig
+    from eudis_swarm.simulation import SCENARIO_PRESETS, Simulation
+
+    base = _replace(SimulationConfig(), **SCENARIO_PRESETS["demo-partition"])  # type: ignore[arg-type]
+    original = build_contract(
+        1, "survey", degradation_policy=DegradationPolicy.CONTINUE, degraded_grace=1.0
+    )
+    amendment = build_contract(
+        2,
+        "survey-amended",
+        degradation_policy=DegradationPolicy.HOLD,
+        degraded_grace=1.0,
+    )
+    return Simulation(
+        _replace(
+            base,
+            mission_contract=original,
+            contract_amendment=amendment,
+            contract_amendment_time=amend_at,
+            contract_amendment_agent_id=1,
+        ),
+        capture_trace=capture,
+    ).run()
+
+
+def test_the_briefed_uav_actually_takes_delivery_of_the_amendment() -> None:
+    """Gossip seeds an origin as knowing a message without applying it.
+
+    That is right for a claim its owner already holds, and wrong for operator
+    intent: the aircraft the operator reached must hold what it was handed.
+    """
+
+    trace = _amended_run(6.0).trace
+    assert trace is not None
+
+    at_issue = next(frame for frame in trace.frames if frame.timestamp >= 6.0)
+    briefed = next(agent for agent in at_issue.agents if agent.agent_id == 1)
+
+    assert briefed.contract_version == 2
+
+
+def test_an_amendment_issued_mid_partition_diverges_then_converges() -> None:
+    """The reason intent is versioned rather than assumed."""
+
+    result = _amended_run(6.0)
+    trace = result.trace
+    assert trace is not None
+
+    diverged = [
+        frame
+        for frame in trace.frames
+        if len({agent.contract_version for agent in frame.agents}) > 1
+    ]
+
+    assert diverged, "the amendment never diverged, so nothing was demonstrated"
+    at_issue = diverged[0]
+    versions = {agent.agent_id: agent.contract_version for agent in at_issue.agents}
+    assert versions[1] == 2
+    assert {versions[peer] for peer in (2, 3, 4)} == {1}
+
+    # and every UAV converges once the network heals
+    assert result.autonomy_kernels is not None
+    assert {kernel.contract_version for kernel in result.autonomy_kernels.values()} == {
+        2
+    }
+    assert result.metrics.completed_task_count == 20
+
+
+def test_an_older_amendment_cannot_roll_intent_backwards() -> None:
+    from eudis_swarm.messaging import MissionContractMessage
+
+    result = _amended_run(6.0, capture=False)
+    assert result.autonomy_kernels is not None
+    kernel = result.autonomy_kernels[1]
+    assert kernel.contract_version == 2
+
+    stale = build_contract(1, "survey", degradation_policy=DegradationPolicy.ABORT)
+    accepted = kernel.receive_contract(stale, 99.0)
+
+    assert accepted is False
+    assert kernel.contract_version == 2
+    # the message type still validates its own shape
+    assert MissionContractMessage(contract=stale, briefed_agent_id=1).version == 1
+
+
+def test_an_amendment_must_supersede_the_contract_it_amends() -> None:
+    from dataclasses import replace as _replace
+
+    from eudis_swarm.config import SimulationConfig
+
+    original = build_contract(2, "survey")
+    with pytest.raises(ValueError, match="supersede"):
+        _replace(
+            SimulationConfig(),
+            mission_contract=original,
+            contract_amendment=build_contract(1, "older"),
+        )
+    with pytest.raises(ValueError, match="initial mission_contract"):
+        _replace(SimulationConfig(), contract_amendment=build_contract(2, "orphan"))

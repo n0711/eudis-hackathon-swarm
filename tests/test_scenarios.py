@@ -194,3 +194,29 @@ def test_the_control_mode_is_configurable_and_validated() -> None:
         _parser().parse_args(["--task-control", "anarchy"])
     with pytest.raises(ValueError, match="task_control"):
         replace(SimulationConfig(), task_control="anarchy")
+
+
+def test_the_amendment_preset_diverges_intent_and_then_converges() -> None:
+    """One command demonstrating why operator intent carries a version."""
+
+    result = Simulation(_config("demo-amendment"), capture_trace=True).run()
+    trace = result.trace
+    assert trace is not None
+
+    diverged = [
+        frame
+        for frame in trace.frames
+        if len({agent.contract_version for agent in frame.agents}) > 1
+    ]
+
+    assert diverged, "the preset never split operator intent"
+    versions = {agent.agent_id: agent.contract_version for agent in diverged[0].agents}
+    assert versions[1] == 2, "the briefed UAV holds the amendment"
+    assert {versions[peer] for peer in (2, 3, 4)} == {1}, "the rest do not yet"
+
+    assert result.autonomy_kernels is not None
+    assert {kernel.contract_version for kernel in result.autonomy_kernels.values()} == {
+        2
+    }
+    assert result.metrics.mission_completed is True
+    assert result.metrics.completed_task_count == 20

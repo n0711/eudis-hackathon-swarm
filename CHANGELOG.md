@@ -8,6 +8,17 @@ and interfaces change between prototypes.
 ## [Unreleased]
 
 ### Added
+- `MissionContractTransport`, flooding amendments of operator intent across
+  active links with the same deterministic store-and-forward gossip used for
+  ownership evidence. A partition therefore does to intent exactly what it
+  does to everything else: one half learns the amendment and the other does
+  not, until the network heals.
+- `SimulationConfig.contract_amendment`, issued mid-mission to one aircraft.
+  The `demo-amendment` preset briefs UAV 1 with v2 at t=6.00 s while the swarm
+  is split: UAV 1 holds v2 and the other three hold v1 for eight frames, then
+  all four converge on v2 once the partition heals, completing 20/20.
+- The dashboard belief panel names each UAV's contracted posture and the
+  intent version behind it, so divergent operator intent is visible on screen.
 - `SimulationConfig.mission_contract` briefs every UAV before launch, and the
   contracted posture gates whether a UAV seeks new work. A UAV holding no
   contract is unconstrained rather than forbidden, so existing scenarios are

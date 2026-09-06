@@ -908,6 +908,17 @@ OWNERSHIP_COLOURS: dict[str, str] = {
     "COMPLETE": "#1B7F4B",
 }
 
+#: Contracted mission posture. The colour tracks how much the operator's
+#: policy is currently restraining this aircraft.
+PHASE_COLOURS: dict[str, str] = {
+    "BRIEFED": "#64748B",
+    "EXECUTING": "#1B7F4B",
+    "HOLDING": "#B4690E",
+    "ABORTED": "#B3261E",
+    "COMPLETE": "#0E7490",
+    "UNAVAILABLE": "#64748B",
+}
+
 OWNERSHIP_LABELS: dict[str, str] = {
     "UNCLAIMED": "UNCLAIMED",
     "OWNED_BY_SELF": "OWNED BY SELF",
@@ -986,6 +997,18 @@ def ownership_evidence_label(view: TraceOwnershipView) -> tuple[str, str]:
     return f"T{view.task_id}: {label}", OWNERSHIP_COLOURS.get(view.state, "#64748B")
 
 
+def phase_label(agent: TraceAgentState) -> str:
+    """Name a UAV's contracted posture and the intent version behind it.
+
+    The version matters: two aircraft either side of a partition can hold
+    different operator intent and act differently on identical evidence.
+    """
+
+    if agent.contract_version is None:
+        return f"{agent.mission_phase} (uncontracted)"
+    return f"{agent.mission_phase} (contract v{agent.contract_version})"
+
+
 def _belief_panel(frame: TraceFrame) -> None:
     """Every UAV's belief about every peer and about the tasks it knows of."""
 
@@ -1022,8 +1045,12 @@ def _belief_panel(frame: TraceFrame) -> None:
             '<div style="border:1px solid #E2E8F0;border-left:4px solid #2F6FED;'
             "border-radius:0.35rem;padding:0.45rem 0.6rem;margin-bottom:0.4rem;"
             'background:#F8FAFC;">'
-            f'<b style="font-size:0.78rem;color:#334155;">UAV {agent.agent_id}</b>'
-            '<div style="margin-top:0.2rem;">'
+            f'<b style="font-size:0.78rem;color:#334155;">UAV {agent.agent_id}</b> '
+            + _chip(
+                phase_label(agent),
+                PHASE_COLOURS.get(agent.mission_phase, "#64748B"),
+            )
+            + '<div style="margin-top:0.2rem;">'
             '<span style="font-size:0.68rem;color:#475569;">peers </span>'
             f"{contacts}</div>"
             '<div style="margin-top:0.15rem;">'

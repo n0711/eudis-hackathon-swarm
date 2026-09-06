@@ -12,8 +12,10 @@ from enum import Enum
 from typing import Generic, TypeVar
 
 from .agent import Heartbeat
+from .autonomy import LocalAutonomyKernel
 from .communication import CommunicationGraph
 from .failure_manager import FailureDeclaration, FailureManager, FailureVote
+from .mission_contract import MissionContract
 from .peer_state import PeerStateStore
 from .task_claims import (
     ClaimId,
@@ -22,7 +24,7 @@ from .task_claims import (
     TaskClaimStore,
     TaskCompletionEvidence,
 )
-from .validation import validate_timestamp
+from .validation import validate_positive_integer, validate_timestamp
 
 _MessageT = TypeVar("_MessageT")
 _MessageIdT = TypeVar("_MessageIdT", bound=Hashable)
@@ -1112,3 +1114,197 @@ __all__ = [
     "TaskProtocolMessageKind",
     "TaskProtocolReceipt",
 ]
+
+
+@dataclass(frozen=True, slots=True)
+class MissionContractMessageId:
+    """Structural identity for one amendment of operator intent.
+
+    Intent is versioned globally by the operator, so the version alone
+    identifies the message. Two UAVs relaying the same amendment are carrying
+    the same message, not two competing ones.
+    """
+
+    version: int
+
+
+@dataclass(frozen=True, slots=True)
+class MissionContractMessage:
+    """One amendment, plus the UAV that first took delivery of it.
+
+    The operator is not a network peer. ``briefed_agent_id`` is simply whichever
+    UAV was in contact with the ground when the amendment was issued; it carries
+    no authority and is never rewritten by a relay.
+    """
+
+    contract: MissionContract
+    briefed_agent_id: int
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.contract, MissionContract):
+            raise TypeError("contract must be a MissionContract")
+        validate_positive_integer(
+            self.briefed_agent_id, name="contract briefed_agent_id"
+        )
+
+    @property
+    def version(self) -> int:
+        return self.contract.version
+
+
+@dataclass(frozen=True, slots=True)
+class MissionContractReceipt:
+    """One graph-authorized delivery of operator intent into one UAV."""
+
+    receiver_agent_id: int
+    source_agent_id: int
+    forwarder_agent_id: int
+    hop_count: int
+    version: int
+    #: Whether this receiver's held intent actually advanced. A replayed or
+    #: superseded amendment is delivered but changes nothing.
+    changed: bool
+
+
+@dataclass(frozen=True, slots=True)
+class MissionContractDeliveryBatch:
+    attempted: int
+    delivered: int
+    undelivered: int
+    receipts: tuple[MissionContractReceipt, ...]
+    forwarded: int = 0
+    duplicates_suppressed: int = 0
+
+    def __post_init__(self) -> None:
+        if min(self.attempted, self.delivered, self.undelivered) < 0:
+            raise ValueError("contract delivery counts must be non-negative")
+
+
+class MissionContractTransport:
+    """Flood amendments of operator intent across active links only.
+
+    A partition therefore does exactly what it does to any other evidence:
+    one side learns the amendment and the other does not, and the two act on
+    different intent until the network heals. That divergence is the reason
+    intent carries a version at all.
+    """
+
+    def __init__(
+        self,
+        graph: CommunicationGraph,
+        kernels: Mapping[int, LocalAutonomyKernel],
+    ) -> None:
+        if frozenset(kernels) != frozenset(graph.agent_ids):
+            raise ValueError("contract kernels must match communication graph UAVs")
+        for owner_agent_id, kernel in kernels.items():
+            if kernel.owner_agent_id != owner_agent_id:
+                raise ValueError("contract kernel key must match its owner")
+        self._graph = graph
+        self._kernels = dict(kernels)
+        self._last_timestamp: float | None = None
+        self._gossip = _DeterministicGossip[
+            MissionContractMessage, MissionContractMessageId
+        ](
+            agent_ids=graph.agent_ids,
+            identity=lambda message: MissionContractMessageId(message.version),
+            origin=lambda message: message.briefed_agent_id,
+            sort_token=lambda message: f"{message.version:012d}",
+        )
+
+    def seen_versions(self, agent_id: int) -> frozenset[int]:
+        """Return the amendment versions one transport replica has handled."""
+
+        return frozenset(
+            message_id.version for message_id in self._gossip.seen_message_ids(agent_id)
+        )
+
+    def deliver_contracts(
+        self,
+        messages: Iterable[MissionContractMessage],
+        timestamp: float,
+        *,
+        receiving_agent_ids: Iterable[int] | None = None,
+    ) -> MissionContractDeliveryBatch:
+        """Disseminate amendments and apply each one at most once per UAV."""
+
+        if not self._graph.initialized:
+            raise RuntimeError(
+                "communication graph must be initialized before contract delivery"
+            )
+        timestamp = validate_timestamp(
+            timestamp,
+            previous=self._last_timestamp,
+            name="contract transport timestamp",
+        )
+        published = tuple(messages)
+        for message in published:
+            if not isinstance(message, MissionContractMessage):
+                raise TypeError(
+                    "deliver_contracts accepts only MissionContractMessage values"
+                )
+            if message.briefed_agent_id not in self._kernels:
+                raise ValueError("unknown briefed UAV for a contract amendment")
+
+        participants = (
+            frozenset(self._kernels)
+            if receiving_agent_ids is None
+            else frozenset(receiving_agent_ids)
+        )
+        unknown = participants - frozenset(self._kernels)
+        if unknown:
+            raise ValueError(f"unknown contract receivers: {sorted(unknown)}")
+
+        receipts: list[MissionContractReceipt] = []
+
+        # The operator hands the amendment to one aircraft directly. Gossip
+        # seeds an origin as *knowing* a message without applying it, which is
+        # right for a claim the owner already holds but wrong here: the briefed
+        # UAV must actually take delivery of what it was given.
+        for message in published:
+            if self._kernels[message.briefed_agent_id].receive_contract(
+                message.contract, timestamp
+            ):
+                receipts.append(
+                    MissionContractReceipt(
+                        receiver_agent_id=message.briefed_agent_id,
+                        source_agent_id=message.briefed_agent_id,
+                        forwarder_agent_id=message.briefed_agent_id,
+                        hop_count=0,
+                        version=message.version,
+                        changed=True,
+                    )
+                )
+
+        def apply(receiver_agent_id: int, message: MissionContractMessage) -> bool:
+            # Supersession is decided by the receiver, not the transport: an
+            # older amendment arriving late must never roll intent backwards.
+            return self._kernels[receiver_agent_id].receive_contract(
+                message.contract, timestamp
+            )
+
+        batch = self._gossip.disseminate(
+            published,
+            self._graph,
+            participants,
+            apply=apply,
+        )
+        for delivery in batch.deliveries:
+            receipts.append(
+                MissionContractReceipt(
+                    receiver_agent_id=delivery.receiver_agent_id,
+                    source_agent_id=delivery.origin_agent_id,
+                    forwarder_agent_id=delivery.forwarder_agent_id,
+                    hop_count=delivery.hop_count,
+                    version=delivery.message.version,
+                    changed=delivery.changed,
+                )
+            )
+        self._last_timestamp = timestamp
+        return MissionContractDeliveryBatch(
+            attempted=batch.attempted,
+            delivered=batch.delivered,
+            undelivered=batch.attempted - batch.delivered,
+            receipts=tuple(receipts),
+            forwarded=batch.forwarded,
+            duplicates_suppressed=batch.duplicates_suppressed,
+        )

@@ -26,6 +26,8 @@ from .evaluation import OwnershipEvaluator
 from .failure_manager import FailureDeclaration, FailureManager
 from .messaging import (
     DeliveryBatch,
+    MissionContractMessage,
+    MissionContractTransport,
     PeerStateTransport,
     ProtocolDeliveryBatch,
     TaskClaimTransport,
@@ -33,6 +35,7 @@ from .messaging import (
 )
 from .metrics import SimulationMetrics
 from .mission import Mission
+from .mission_contract import DegradationPolicy, build_contract
 from .peer_state import PeerStateStore
 from .simulation_events import (
     CommunicationEvent,
@@ -261,6 +264,10 @@ class Simulation:
         self._blocked_communication_agents: set[int] = set()
         self._last_communication_update: float | None = None
         self._last_communication_event: float | None = None
+        self.mission_contract_transport = MissionContractTransport(
+            self.communication_graph, self.autonomy_kernels
+        )
+        self._contract_amendment_published = config.contract_amendment is None
         if config.mission_contract is not None:
             # The operator briefs the fleet before launch. A later amendment
             # would have to reach each UAV as evidence, like anything else.
@@ -269,6 +276,49 @@ class Simulation:
         self._ownership_evaluator = OwnershipEvaluator(metrics)
         self._has_run = False
         self._trace_recorder = TraceRecorder(config) if capture_trace else None
+
+    def _maybe_amend_contract(self, timestamp: float) -> None:
+        """Hand an amendment to one UAV and let it spread as ordinary evidence.
+
+        The operator reaches exactly one aircraft. Whether the rest learn of the
+        change depends on the network, which is the point: across a partition
+        they will not, and the two halves act on different intent until it heals.
+        """
+
+        amendment = self.config.contract_amendment
+        if amendment is None or self._contract_amendment_published:
+            return
+        if timestamp + 1e-12 < self.config.contract_amendment_time:
+            return
+        briefed = self.config.contract_amendment_agent_id
+        participants = self._participating_agent_ids()
+        if briefed not in participants:
+            return
+        self._contract_amendment_published = True
+        self.mission_contract_transport.deliver_contracts(
+            (MissionContractMessage(contract=amendment, briefed_agent_id=briefed),),
+            timestamp,
+            receiving_agent_ids=participants,
+        )
+        LOGGER.info(
+            "[CONTRACT] UAV %d briefed with contract v%d at t=%.2fs",
+            briefed,
+            amendment.version,
+            timestamp,
+        )
+
+    def _propagate_contract(self, timestamp: float) -> None:
+        """Retry amendment routes that a healing link has just made possible."""
+
+        if self.config.contract_amendment is None:
+            return
+        if not self._contract_amendment_published:
+            return
+        self.mission_contract_transport.deliver_contracts(
+            (),
+            timestamp,
+            receiving_agent_ids=self._participating_agent_ids(),
+        )
 
     def _all_stood_down(self) -> bool:
         """Whether every responsive UAV has been contracted to stop."""
@@ -1198,8 +1248,10 @@ class Simulation:
                 while next_heartbeat <= timestamp + epsilon:
                     next_heartbeat += self.config.heartbeat_interval
 
+            self._maybe_amend_contract(timestamp)
             declarations = self._exchange_failure_evidence(timestamp)
             self.mission.detect_and_recover(timestamp, declarations)
+            self._propagate_contract(timestamp)
             self._exchange_claim_evidence(timestamp)
             completed_now = self._complete_arrivals(timestamp)
             if completed_now:
@@ -1286,6 +1338,28 @@ SCENARIO_PRESETS: dict[str, dict[str, object]] = {
     # The same partition under one central coordinator, for side-by-side
     # comparison. It never double-books, because it assumes a consistent
     # global view; it strands work instead, which is the assumption failing.
+    # An amendment issued to one aircraft while the swarm is split. The two
+    # halves act on different operator intent until the network heals, which is
+    # the reason intent carries a version at all.
+    "demo-amendment": {
+        "communication_range": 50.0,
+        "region_jammer": RegionJammer(40.0, 50.0, 15.0, 3.0, 8.0),
+        "failure_time": 1000.0,
+        "mission_contract": build_contract(
+            1,
+            "survey",
+            degradation_policy=DegradationPolicy.CONTINUE,
+            degraded_grace=1.0,
+        ),
+        "contract_amendment": build_contract(
+            2,
+            "survey-amended",
+            degradation_policy=DegradationPolicy.HOLD,
+            degraded_grace=1.0,
+        ),
+        "contract_amendment_time": 6.0,
+        "contract_amendment_agent_id": 1,
+    },
     "baseline": {
         "communication_range": 50.0,
         "region_jammer": RegionJammer(40.0, 50.0, 15.0, 3.0, 8.0),

@@ -304,3 +304,70 @@ def test_the_view_states_where_its_data_came_from() -> None:
     assert "Post-mission replay" in REPLAY_PROVENANCE
     assert "each UAV's own recorded log" in REPLAY_PROVENANCE
     assert "evaluator-computed" in REPLAY_PROVENANCE
+
+
+# --------------------------------------------------------------------------
+# contracted posture on screen
+# --------------------------------------------------------------------------
+
+
+def test_every_mission_phase_has_a_colour() -> None:
+    from eudis_swarm.autonomy import MissionPhase
+    from eudis_swarm.dashboard_app import PHASE_COLOURS
+
+    assert {phase.value for phase in MissionPhase} <= set(PHASE_COLOURS)
+    assert "UNAVAILABLE" in PHASE_COLOURS
+
+
+def test_the_phase_label_names_the_intent_version_behind_it() -> None:
+    from eudis_swarm.dashboard_app import phase_label
+    from eudis_swarm.trace import TraceAgentState
+
+    def agent(phase: str, version: int | None) -> TraceAgentState:
+        return TraceAgentState(
+            agent_id=1,
+            physical_state="ACTIVE",
+            coordinator_state="ACTIVE",
+            responsive=True,
+            failure_detected=False,
+            current_task=None,
+            position=(0.0, 0.0),
+            neighbor_ids=(),
+            fresh_peer_count=0,
+            stale_peer_count=0,
+            unknown_peer_count=0,
+            peer_knowledge=(),
+            coordination_mode="COOPERATIVE",
+            contact_states=(),
+            mission_phase=phase,
+            contract_version=version,
+        )
+
+    assert phase_label(agent("HOLDING", 2)) == "HOLDING (contract v2)"
+    assert phase_label(agent("EXECUTING", None)) == "EXECUTING (uncontracted)"
+
+
+def test_divergent_intent_is_visible_on_screen() -> None:
+    """Two aircraft holding different versions must read differently."""
+
+    from dataclasses import replace as _replace
+
+    from eudis_swarm.config import SimulationConfig
+    from eudis_swarm.dashboard_app import phase_label
+    from eudis_swarm.simulation import SCENARIO_PRESETS, Simulation
+
+    config = _replace(SimulationConfig(), **SCENARIO_PRESETS["demo-amendment"])  # type: ignore[arg-type]
+    trace = Simulation(config, capture_trace=True).run().trace
+    assert trace is not None
+
+    labels_by_frame = [
+        {phase_label(agent) for agent in frame.agents} for frame in trace.frames
+    ]
+    mixed = [labels for labels in labels_by_frame if len(labels) > 1]
+
+    assert mixed, "no frame showed the swarm holding differing intent"
+    assert any(
+        any("v1" in label for label in labels)
+        and any("v2" in label for label in labels)
+        for labels in mixed
+    )

@@ -31,6 +31,11 @@ class SimulationConfig:
     allocation_policy: str = "distance"
     task_control: str = "distributed"
     mission_contract: MissionContract | None = None
+    #: An amendment issued mid-mission to one UAV, which must then reach the
+    #: rest as evidence. Across a partition, it will not.
+    contract_amendment: MissionContract | None = None
+    contract_amendment_time: float = 6.0
+    contract_amendment_agent_id: int = 1
     claim_lease_duration: float = 2.5
     failure_agent_id: int = 2
     failure_time: float = 4.0
@@ -57,6 +62,22 @@ class SimulationConfig:
             )
         if self.allocation_policy not in {"distance", "connectivity"}:
             raise ValueError("allocation_policy must be 'distance' or 'connectivity'")
+        if self.contract_amendment is not None:
+            validate_positive_integer(
+                self.contract_amendment_agent_id,
+                name="contract_amendment_agent_id",
+            )
+            if not 1 <= self.contract_amendment_agent_id <= self.agent_count:
+                raise ValueError(
+                    "contract_amendment_agent_id must identify a configured agent"
+                )
+            if self.mission_contract is None:
+                raise ValueError("an amendment requires an initial mission_contract")
+            if not self.contract_amendment.supersedes(self.mission_contract):
+                raise ValueError("contract_amendment must supersede mission_contract")
+            validate_nonnegative_real(
+                self.contract_amendment_time, name="contract_amendment_time"
+            )
         if self.task_control not in {"distributed", "centralized"}:
             raise ValueError("task_control must be 'distributed' or 'centralized'")
         if self.link_model not in {"range", "radio"}:
