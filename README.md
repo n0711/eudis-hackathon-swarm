@@ -15,6 +15,13 @@ Every result below is reproducible from a fixed command line. There is no
 wall-clock time, no unseeded randomness, and no order-dependent iteration in the
 simulator, so the same commands produce the same numbers on any machine.
 
+The operating environment this is aimed at is not hypothetical: EASA currently
+lists `LCCC NICOSIA` among the Flight Information Regions affected by GNSS
+jamming and spoofing, and a peer-reviewed flight experiment in that FIR recorded
+a receiver losing positioning for 80% of the time aloft. See
+[`docs/threat_context.md`](docs/threat_context.md) — including what those
+sources deliberately do *not* establish about this simulator.
+
 ## The result in two commands
 
 Declaring a UAV failed requires a quorum, and the threshold guarantees that one
@@ -629,6 +636,7 @@ eudis-swarm/
 │   └── ...
 ├── docs/
 │   ├── measured_results.md                # reproducible sweep results, and their stated limits
+│   ├── threat_context.md                  # cited GNSS interference context, and what it does not show
 │   ├── distributed_state_foundation.md   # state boundary, EFSM, quorum, leases, reconciliation
 │   ├── autonomy_efsm.md                   # generated transition tables + composition/locality rules
 │   ├── vehicle_model.md                   # open lane: kinematics, energy, calibration
