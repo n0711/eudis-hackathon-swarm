@@ -21,7 +21,8 @@ from pathlib import Path
 from typing import Iterator, Sequence
 
 from .config import SimulationConfig
-from .simulation import Simulation
+from .mission_contract import DegradationPolicy, build_contract
+from .simulation import Simulation, _parse_jammer
 
 SWEEPABLE_PARAMETERS: dict[str, str] = {
     "lease-timeout": "claim_lease_duration",
@@ -34,6 +35,10 @@ CSV_COLUMNS: tuple[str, ...] = (
     "param",
     "param_value",
     "seed",
+    # Held constant for a run, but recorded on every row so two sweeps can be
+    # concatenated and compared without tracking which file came from where.
+    "task_control",
+    "degradation_policy",
     "communication_range",
     "claim_lease_duration",
     "tasks_completed",
@@ -86,6 +91,12 @@ def _row(
         "param": parameter,
         "param_value": number(value),
         "seed": str(seed),
+        "task_control": config.task_control,
+        "degradation_policy": (
+            "none"
+            if config.mission_contract is None
+            else config.mission_contract.degradation_policy.value
+        ),
         "communication_range": number(config.communication_range),
         "claim_lease_duration": number(config.claim_lease_duration),
         "tasks_completed": str(metrics.completed_task_count),
@@ -164,6 +175,31 @@ def _parser() -> argparse.ArgumentParser:
         default=50.0,
         help="held fixed unless it is the swept parameter",
     )
+    parser.add_argument(
+        "--task-control",
+        choices=("distributed", "centralized"),
+        default="distributed",
+        help="held constant across the sweep and recorded on every row",
+    )
+    parser.add_argument(
+        "--degradation-policy",
+        choices=("none", "CONTINUE", "HOLD", "ABORT"),
+        default="none",
+        help="operator degradation policy; 'none' runs without a contract",
+    )
+    parser.add_argument(
+        "--degraded-grace",
+        type=float,
+        default=1.0,
+        help="how long degradation must persist before the policy engages",
+    )
+    parser.add_argument(
+        "--jammer",
+        type=str,
+        default=None,
+        metavar="X,Y,RADIUS,T_START,T_END",
+        help="a circular jamming region, as on the main CLI",
+    )
     parser.add_argument("--agents", type=int, default=4)
     parser.add_argument("--tasks", type=int, default=20)
     parser.add_argument(
@@ -185,12 +221,30 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     values = parameter_values(arguments.start, arguments.stop, arguments.steps)
     seeds = tuple(range(arguments.seed_base, arguments.seed_base + arguments.seeds))
-    base_config = SimulationConfig(
-        agent_count=arguments.agents,
-        task_count=arguments.tasks,
-        communication_range=arguments.communication_range,
-        failure_time=arguments.failure_time,
+    contract = (
+        None
+        if arguments.degradation_policy == "none"
+        else build_contract(
+            1,
+            "sweep",
+            degradation_policy=DegradationPolicy(arguments.degradation_policy),
+            degraded_grace=arguments.degraded_grace,
+        )
     )
+    try:
+        base_config = SimulationConfig(
+            agent_count=arguments.agents,
+            task_count=arguments.tasks,
+            communication_range=arguments.communication_range,
+            failure_time=arguments.failure_time,
+            task_control=arguments.task_control,
+            mission_contract=contract,
+            region_jammer=(
+                None if arguments.jammer is None else _parse_jammer(arguments.jammer)
+            ),
+        )
+    except ValueError as error:
+        _parser().error(str(error))
 
     rows = run_sweep(arguments.param, values, seeds, base_config)
     if arguments.output is None:

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import csv
 import io
+from dataclasses import replace
 
 import pytest
 
@@ -205,3 +206,129 @@ def test_cli_rejects_empty_sweeps(arguments: list[str]) -> None:
         main(arguments)
 
     assert exit_info.value.code == 2
+
+
+# --------------------------------------------------------------------------
+# held-constant dimensions
+# --------------------------------------------------------------------------
+
+
+def test_held_constants_are_recorded_on_every_row() -> None:
+    """Two sweeps must be concatenable without tracking which file is which."""
+
+    rows = list(run_sweep("lease-timeout", (2.5,), (1,), _base_config()))
+
+    assert rows[0]["task_control"] == "distributed"
+    assert rows[0]["degradation_policy"] == "none"
+
+
+def test_the_control_mode_is_carried_into_the_simulation() -> None:
+    exit_code = main(
+        [
+            "--from",
+            "2.5",
+            "--to",
+            "2.5",
+            "--steps",
+            "1",
+            "--seeds",
+            "1",
+            "--tasks",
+            "3",
+            "--failure-time",
+            "100",
+            "--task-control",
+            "centralized",
+        ]
+    )
+    assert exit_code == 0
+
+
+def test_a_degradation_policy_reaches_the_contract(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    exit_code = main(
+        [
+            "--from",
+            "2.5",
+            "--to",
+            "2.5",
+            "--steps",
+            "1",
+            "--seeds",
+            "1",
+            "--tasks",
+            "3",
+            "--failure-time",
+            "100",
+            "--degradation-policy",
+            "HOLD",
+        ]
+    )
+
+    assert exit_code == 0
+    rows = list(csv.DictReader(io.StringIO(capsys.readouterr().out)))
+    assert [row["degradation_policy"] for row in rows] == ["HOLD"]
+
+
+def test_a_jammer_can_be_held_constant(capsys: pytest.CaptureFixture[str]) -> None:
+    """Without degradation there is nothing for a policy sweep to measure."""
+
+    exit_code = main(
+        [
+            "--from",
+            "2.5",
+            "--to",
+            "2.5",
+            "--steps",
+            "1",
+            "--seeds",
+            "1",
+            "--tasks",
+            "4",
+            "--failure-time",
+            "1000",
+            "--communication-range",
+            "50",
+            "--jammer",
+            "40,50,15,3,8",
+        ]
+    )
+
+    assert exit_code == 0
+    rows = list(csv.DictReader(io.StringIO(capsys.readouterr().out)))
+    assert len(rows) == 1
+    assert rows[0]["communication_range"] == "50.000000"
+
+
+def test_a_malformed_jammer_is_rejected_cleanly() -> None:
+    with pytest.raises(SystemExit) as exit_info:
+        main(
+            [
+                "--from",
+                "1",
+                "--to",
+                "1",
+                "--steps",
+                "1",
+                "--seeds",
+                "1",
+                "--jammer",
+                "not,a,jammer",
+            ]
+        )
+
+    assert exit_info.value.code == 2
+
+
+def test_control_modes_remain_separable_in_one_concatenated_table() -> None:
+    """The point of recording held constants: compare without bookkeeping."""
+
+    rows = []
+    for mode in ("distributed", "centralized"):
+        config = replace(_base_config(), task_control=mode)
+        rows.extend(run_sweep("lease-timeout", (2.5,), (1, 2), config))
+
+    by_mode = {row["task_control"] for row in rows}
+    assert by_mode == {"distributed", "centralized"}
+    assert len(rows) == 4
