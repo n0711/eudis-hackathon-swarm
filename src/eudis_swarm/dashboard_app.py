@@ -18,6 +18,7 @@ from eudis_swarm.trace import (
     TraceAgentState,
     TraceEvent,
     TraceFrame,
+    TraceOwnershipView,
     TraceTransition,
 )
 
@@ -649,6 +650,22 @@ def _load_trace() -> tuple[SimulationTrace | None, str]:
     return None, path
 
 
+def _load_comparison_traces() -> tuple[SimulationTrace | None, SimulationTrace | None]:
+    """Load the two traces the side-by-side view compares."""
+
+    st.sidebar.header("Comparison traces")
+    left_path = st.sidebar.text_input("Left (centralised) trace", value="left.json")
+    right_path = st.sidebar.text_input("Right (distributed) trace", value="right.json")
+    loaded: list[SimulationTrace | None] = []
+    for label, path in (("left", left_path), ("right", right_path)):
+        try:
+            loaded.append(_read_trace_path(path))
+        except (OSError, ValueError, KeyError) as error:
+            st.sidebar.error(f"Could not load {label} trace: {error}")
+            loaded.append(None)
+    return loaded[0], loaded[1]
+
+
 def render_dashboard() -> None:
     st.set_page_config(page_title="EUDIS Swarm Playback", layout="wide")
     st.markdown(
@@ -672,6 +689,21 @@ def render_dashboard() -> None:
         unsafe_allow_html=True,
     )
     st.title("EUDIS Swarm · mission playback")
+    view = st.sidebar.radio(
+        "View",
+        ("Single trace", "Belief comparison"),
+        help="Comparison replays two runs of one scenario side by side.",
+    )
+    if view == "Belief comparison":
+        left, right = _load_comparison_traces()
+        if left is None or right is None:
+            st.code(
+                "eudis-swarm --scenario baseline --record-trace left.json\n"
+                "eudis-swarm --scenario demo-partition --record-trace right.json"
+            )
+            return
+        render_comparison(left, right)
+        return
     trace, source_name = _load_trace()
     if trace is None:
         st.code(
@@ -843,3 +875,259 @@ def render_dashboard() -> None:
 
 if __name__ == "__main__":
     render_dashboard()
+
+
+# ---------------------------------------------------------------------------
+# Side-by-side belief comparison
+#
+# Everything below is reconstructed from per-agent trace fields:
+# peer_knowledge, contact_states and the recorded ownership views. World truth
+# is deliberately unavailable here, and tests/test_dashboard_boundary.py fails
+# the build if this module ever imports something that carries it.
+# ---------------------------------------------------------------------------
+
+#: Evidence a receiver actually holds about a peer. There is deliberately no
+#: "unreachable" state: a radio cannot tell a jammed peer from a destroyed one,
+#: so silence is reported as silence, with its age.
+CONTACT_COLOURS: dict[str, str] = {
+    "HEARD": "#1B7F4B",
+    "SILENT": "#B4690E",
+    "DECLARED_FAILED": "#B3261E",
+}
+
+OWNERSHIP_COLOURS: dict[str, str] = {
+    "UNCLAIMED": "#64748B",
+    "OWNED_BY_SELF": "#2F6FED",
+    "CLAIMED_BY_PEER_FRESH": "#0E7490",
+    "CLAIMED_BY_PEER_STALE": "#B4690E",
+    "CONTESTED": "#B3261E",
+    "COMPLETE": "#1B7F4B",
+}
+
+OWNERSHIP_LABELS: dict[str, str] = {
+    "UNCLAIMED": "UNCLAIMED",
+    "OWNED_BY_SELF": "OWNED BY SELF",
+    "CLAIMED_BY_PEER_FRESH": "CLAIMED BY PEER (fresh)",
+    "CLAIMED_BY_PEER_STALE": "CLAIMED BY PEER (stale)",
+    "CONTESTED": "CONTESTED",
+    "COMPLETE": "COMPLETE",
+}
+
+REPLAY_PROVENANCE = (
+    "Post-mission replay, reconstructed from each UAV's own recorded log. "
+    "Nothing shown here was available to the swarm at run time, except the "
+    "panels explicitly labelled as evaluator-computed."
+)
+
+
+def _chip(text: str, colour: str) -> str:
+    return (
+        f'<span style="display:inline-block;background:{colour};color:#FFFFFF;'
+        "padding:0.12rem 0.42rem;border-radius:0.25rem;font-size:0.72rem;"
+        f'white-space:nowrap;margin:0.1rem 0.15rem 0.1rem 0;">{text}</span>'
+    )
+
+
+def contact_evidence_label(
+    agent: TraceAgentState, peer_agent_id: int, now: float
+) -> tuple[str, str]:
+    """Describe one receiver's evidence about one peer, never a conclusion.
+
+    Returns the label and the colour. A peer that has never been heard from is
+    reported as having no evidence rather than being assumed present or absent.
+    """
+
+    knowledge = next(
+        (item for item in agent.peer_knowledge if item.peer_agent_id == peer_agent_id),
+        None,
+    )
+    contact = next(
+        (item for item in agent.contact_states if item.peer_agent_id == peer_agent_id),
+        None,
+    )
+    status = None if knowledge is None else knowledge.peer_status
+    if status is None and contact is not None:
+        status = contact.state
+    if status is None:
+        return f"{peer_agent_id}: NO EVIDENCE", "#64748B"
+
+    heard_at: float | None = None
+    if contact is not None and contact.last_rx_at is not None:
+        heard_at = contact.last_rx_at
+    elif knowledge is not None and knowledge.received_at is not None:
+        heard_at = knowledge.received_at
+
+    if status == "DECLARED_FAILED":
+        return f"{peer_agent_id}: DECLARED FAILED (quorum)", CONTACT_COLOURS[status]
+
+    age = "" if heard_at is None else f" {max(now - heard_at, 0.0):.1f}s"
+    return (
+        f"{peer_agent_id}: {status}{age}",
+        CONTACT_COLOURS.get(status, "#64748B"),
+    )
+
+
+def ownership_evidence_label(view: TraceOwnershipView) -> tuple[str, str]:
+    """Describe one replica's ownership belief about one task.
+
+    A contest is carried by the ``contested`` flag rather than by the state
+    string, so a replica can simultaneously believe it owns a task and see a
+    competing claim for it. That is the split-brain condition, and it takes
+    precedence in the label because it is the thing worth noticing.
+    """
+
+    if view.contested:
+        return f"T{view.task_id}: CONTESTED", OWNERSHIP_COLOURS["CONTESTED"]
+    label = OWNERSHIP_LABELS.get(view.state, view.state)
+    return f"T{view.task_id}: {label}", OWNERSHIP_COLOURS.get(view.state, "#64748B")
+
+
+def _belief_panel(frame: TraceFrame) -> None:
+    """Every UAV's belief about every peer and about the tasks it knows of."""
+
+    st.markdown("**What each UAV believes**")
+    st.caption(
+        "Reconstructed only from what that UAV received. Peers are labelled by "
+        "evidence and its age, never by conclusion."
+    )
+    agent_ids = [agent.agent_id for agent in frame.agents]
+    ownership_by_observer: dict[int, list[TraceOwnershipView]] = {}
+    for view in frame.ownership:
+        ownership_by_observer.setdefault(view.observer_agent_id, []).append(view)
+
+    blocks: list[str] = []
+    for agent in frame.agents:
+        contacts = "".join(
+            _chip(*contact_evidence_label(agent, peer_agent_id, frame.timestamp))
+            for peer_agent_id in agent_ids
+            if peer_agent_id != agent.agent_id
+        )
+        views = sorted(
+            ownership_by_observer.get(agent.agent_id, []),
+            key=lambda item: item.task_id,
+        )
+        notable = [view for view in views if view.state != "UNCLAIMED"]
+        tasks = "".join(_chip(*ownership_evidence_label(view)) for view in notable)
+        # A task this replica holds no claim evidence for is UNCLAIMED to it.
+        # That belief is real and worth showing, but naming twenty of them
+        # would bury the rest, so it is summarised.
+        unclaimed = len(frame.tasks) - len(notable)
+        if unclaimed > 0:
+            tasks += _chip(f"{unclaimed} x UNCLAIMED", OWNERSHIP_COLOURS["UNCLAIMED"])
+        blocks.append(
+            '<div style="border:1px solid #E2E8F0;border-left:4px solid #2F6FED;'
+            "border-radius:0.35rem;padding:0.45rem 0.6rem;margin-bottom:0.4rem;"
+            'background:#F8FAFC;">'
+            f'<b style="font-size:0.78rem;color:#334155;">UAV {agent.agent_id}</b>'
+            '<div style="margin-top:0.2rem;">'
+            '<span style="font-size:0.68rem;color:#475569;">peers </span>'
+            f"{contacts}</div>"
+            '<div style="margin-top:0.15rem;">'
+            '<span style="font-size:0.68rem;color:#475569;">tasks </span>'
+            f"{tasks}</div></div>"
+        )
+    st.markdown("".join(blocks), unsafe_allow_html=True)
+
+
+def _wasted_work_counters(frame: TraceFrame) -> None:
+    """Evaluator-computed ground truth. No UAV can observe either number."""
+
+    st.markdown(
+        '<div style="display:grid;grid-template-columns:1fr 1fr;gap:0.5rem;">'
+        '<div style="background:#FFF7F5;border:1px solid #F3C7BF;padding:0.5rem;'
+        'border-radius:0.35rem;">'
+        '<span style="display:block;font-size:0.68rem;color:#475569;">'
+        "Double-booked (task-seconds)</span>"
+        '<strong style="font-size:1.2rem;color:#B3261E;">'
+        f"{frame.metrics.concurrent_ownership_duration:.2f}</strong></div>"
+        '<div style="background:#FFFBEB;border:1px solid #F0D9A0;padding:0.5rem;'
+        'border-radius:0.35rem;">'
+        '<span style="display:block;font-size:0.68rem;color:#475569;">'
+        "Stranded work (task-seconds)</span>"
+        '<strong style="font-size:1.2rem;color:#B4690E;">'
+        f"{frame.metrics.dropped_ownership_time:.2f}</strong></div></div>",
+        unsafe_allow_html=True,
+    )
+    st.caption(
+        "Evaluator-computed ground truth, measured from outside the swarm by "
+        "comparing every replica at one instant. No UAV can observe these."
+    )
+
+
+def aligned_frame_index(trace: SimulationTrace, timestamp: float) -> int:
+    """Return the newest frame at or before a shared instant.
+
+    The two runs advance on their own event boundaries, so they are aligned by
+    logical time rather than by frame number.
+    """
+
+    index = 0
+    for candidate, frame in enumerate(trace.frames):
+        if frame.timestamp <= timestamp + 1e-9:
+            index = candidate
+        else:
+            break
+    return index
+
+
+def _comparison_side(
+    trace: SimulationTrace,
+    frame_index: int,
+    title: str,
+    subtitle: str,
+    key: str,
+) -> None:
+    frame = trace.frames[frame_index]
+    st.markdown(f"### {title}")
+    st.caption(subtitle)
+    _wasted_work_counters(frame)
+    st.plotly_chart(
+        _mission_figure(
+            trace,
+            frame_index,
+            show_paths=False,
+            show_links=True,
+            inspected_agent_id=frame.agents[0].agent_id,
+        ),
+        use_container_width=True,
+        key=f"{key}-map",
+    )
+    _belief_panel(frame)
+
+
+def render_comparison(
+    left: SimulationTrace,
+    right: SimulationTrace,
+    *,
+    left_title: str = "Centralised coordinator",
+    right_title: str = "Replicated ownership",
+) -> None:
+    """Draw two runs of one scenario side by side at a shared instant."""
+
+    st.caption(REPLAY_PROVENANCE)
+    duration = max(left.frames[-1].timestamp, right.frames[-1].timestamp)
+    timestamp = st.slider(
+        "Shared mission time (s)",
+        min_value=0.0,
+        max_value=float(duration),
+        value=0.0,
+        step=0.25,
+        key="comparison-time",
+    )
+    left_column, right_column = st.columns(2)
+    with left_column:
+        _comparison_side(
+            left,
+            aligned_frame_index(left, timestamp),
+            left_title,
+            "One coordinator assigns every task from a single consistent view.",
+            "left",
+        )
+    with right_column:
+        _comparison_side(
+            right,
+            aligned_frame_index(right, timestamp),
+            right_title,
+            "Each UAV claims its own work and reconciles on reconnection.",
+            "right",
+        )

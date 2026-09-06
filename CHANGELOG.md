@@ -8,6 +8,13 @@ and interfaces change between prototypes.
 ## [Unreleased]
 
 ### Added
+- A side-by-side belief comparison in the dashboard, replaying two runs of one
+  scenario aligned by logical time. Each side shows vehicle positions and
+  links, every UAV's evidence about every peer, its ownership belief per task,
+  and the evaluator-computed wasted-work counters. Peers are labelled by
+  evidence and its age (`HEARD 0.4s`, `SILENT 8.7s`,
+  `DECLARED FAILED (quorum)`), never by conclusion, and the view states that
+  it is a post-mission replay reconstructed from each UAV's own log.
 - `SimulationConfig.task_control` and `--task-control`, selecting replicated
   distributed ownership or the centralized coordinator baseline. `Mission`
   already contained the complete centralized path behind
