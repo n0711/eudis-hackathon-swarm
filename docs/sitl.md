@@ -91,26 +91,64 @@ better long-term answer and the wrong thing to attempt first.
 
 ## Environment on this machine
 
-- WSL2 with Ubuntu 22.04 is installed and currently stopped. That is the
-  supported route: ArduPilot SITL builds and runs cleanly on Ubuntu, and its
-  Windows story is poor.
-- Nothing SITL-related is installed yet: no `pymavlink`, `mavsdk` or `dronekit`,
-  no `sim_vehicle.py`, no MAVProxy, no PX4, no Gazebo.
-- Networking between Windows and WSL2 is NAT by default; MAVLink UDP endpoints
-  need the WSL address rather than `localhost`, and that is the first thing that
-  will waste an afternoon.
+- WSL2 with Ubuntu 22.04, holding an ArduPilot checkout with `sim_vehicle.py`,
+  MAVProxy and `pymavlink` already present. `ardurover` was already built;
+  `arducopter` built from the warm ccache in 32 seconds.
+- `pymavlink` is installed on the Windows side too, from the `sitl` extra.
+- WSL2 networking is NAT here: the vehicle is reached at the WSL address rather
+  than `localhost`, and the SITL binary listens on `0.0.0.0:5760` so Windows can
+  reach it directly. No UDP forwarding or address discovery from inside WSL is
+  needed.
+
+## Phase 2 is done: it flies
+
+An ArduCopter SITL instance in WSL, commanded from the Windows virtual
+environment through `eudis_swarm.sitl.SitlVehicle`, armed, climbed to 20 m and
+flew a three-waypoint circuit given entirely in the simulator's local metres:
+
+```text
+connected at origin 35.1263999,33.4298998
+airborne at 19.3 m after 1.3s
+  -> target (40.0,  0.0): reached=True  at ( 37.33, -0.01)  err=2.67 m
+  -> target (40.0, 40.0): reached=True  at ( 40.15, 37.86)  err=2.15 m
+  -> target ( 0.0,  0.0): reached=True  at (  2.15,  2.07)  err=2.98 m
+```
+
+Reproduce it in two terminals:
+
+```bash
+# WSL
+./scripts/sitl-copter.sh
+
+# Windows, in the virtual environment
+python -c "from eudis_swarm.sitl import SitlVehicle; v = SitlVehicle('tcp:<wsl-ip>:5760'); v.connect(); v.arm_and_takeoff(20.0); v.command_toward((40.0, 0.0)); print(v.wait_until_within((40.0, 0.0), 3.0), v.position)"
+```
+
+Find `<wsl-ip>` with `wsl -d Ubuntu-22.04 -- hostname -I`. It changes when WSL
+restarts, and that is the first thing to check when a link that worked
+yesterday times out today.
+
+Two things worth recording from doing it:
+
+- **SITL streams nothing until asked.** A connection succeeds, heartbeats
+  arrive, and no position ever does, because a ground station is expected to
+  request the streams. `SitlVehicle.connect` requests them.
+- **The arrival tolerance is real.** The vehicle settles 2-3 m from a commanded
+  point rather than on it. That is not error to be tuned away; it is the
+  difference between a point mass and an aircraft, and it is the first thing
+  phase 3 measures.
 
 ## Phases
 
 Each phase ends somewhere useful, so the work can stop at any boundary without
 leaving a half-integration behind.
 
-**Phase 1 — the seam, no SITL.** Introduce `VehicleBackend`, make the existing
+**Phase 1 — the seam, no SITL.** *(done)* Introduce `VehicleBackend`, make the existing
 point-mass model an implementation of it, and prove by test that behaviour is
 unchanged. Zero new dependencies, zero risk to determinism. *This is the phase
 that makes the rest additive rather than invasive.*
 
-**Phase 2 — one vehicle.** ArduPilot SITL in WSL, `pymavlink` behind the `sitl`
+**Phase 2 — one vehicle.** *(done)* ArduPilot SITL in WSL, `pymavlink` behind the `sitl`
 extra, one aircraft flying to commanded waypoints under `MavlinkBackend`, with
 the coordination layer untouched. Deliverable: a recording of one UAV completing
 one task against real firmware.

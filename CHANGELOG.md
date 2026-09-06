@@ -8,6 +8,23 @@ and interfaces change between prototypes.
 ## [Unreleased]
 
 ### Added
+- **Software in the loop, flying.** `eudis_swarm.sitl.SitlVehicle` commands a
+  real ArduPilot instance in the simulator's own local metres. An ArduCopter
+  SITL vehicle armed, climbed to 20 m and flew a three-waypoint circuit,
+  settling 2-3 m from each commanded point. `pymavlink` arrives through a new
+  `sitl` optional extra, imported on demand, and a test asserts in a fresh
+  interpreter that importing the simulator pulls in neither the backend nor
+  pymavlink -- so a missing extra disables one backend rather than the package.
+- `eudis_swarm.geodesy`, the local east/north frame that conversion crosses:
+  pure, dependency-free, and tested without a vehicle anywhere near it. It
+  round-trips exactly over the working area and reports its own projection
+  error rather than leaving the reader to assume it.
+- `scripts/sitl-copter.sh`, starting one headless ArduCopter instance, and the
+  two things that actually cost time when doing this: SITL streams no telemetry
+  until a ground station requests it, and the WSL address changes on restart.
+- `SitlVehicle.deterministic` is `False`, readable off the class, so anything
+  producing published numbers can refuse a non-reproducible backend without
+  first connecting to one.
 - A 440-run population result in `docs/measured_results.md`: eleven
   communication ranges, twenty seeds, both control modes, with a jammer. Central
   control failed 68 of 220 missions and distributed failed none, while the two

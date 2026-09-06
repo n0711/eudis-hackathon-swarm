@@ -47,6 +47,9 @@ dev = [
     "ruff>=0.12,<1",
 ]
 visualization = ["matplotlib>=3.8"]
+# Software-in-the-loop only. Nothing in the core imports these, and a SITL run
+# never produces a measured result: see docs/sitl.md.
+sitl = ["pymavlink>=2.4.42"]
 dashboard = [
     "plotly>=5.24,<8",
     "streamlit>=1.40,<2",
@@ -85,6 +88,9 @@ omit = [
     "src/eudis_swarm/dashboard.py",
     "src/eudis_swarm/dashboard_app.py",
     "src/eudis_swarm/visualization.py",
+    # Needs a live autopilot to exercise, which CI deliberately does not have.
+    # Everything in it that can be tested without one is, in tests/test_sitl.py.
+    "src/eudis_swarm/sitl.py",
 ]
 
 [tool.coverage.report]

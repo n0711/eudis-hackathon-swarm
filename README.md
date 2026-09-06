@@ -645,7 +645,8 @@ eudis-swarm/
 │   │                           #   communication graph, transport, integration, packaging
 │   └── ...
 ├── scripts/
-│   └── pitch-demo.ps1                     # runs both quorum-floor scenarios, no activation needed
+│   ├── pitch-demo.ps1                     # runs both quorum-floor scenarios, no activation needed
+│   └── sitl-copter.sh                     # starts one headless ArduCopter SITL instance
 ├── docs/
 │   ├── measured_results.md                # reproducible sweep results, and their stated limits
 │   ├── threat_context.md                  # cited GNSS interference context, and what it does not show
@@ -673,6 +674,7 @@ Key areas:
 | Messaging / transport | `messaging.py` |
 | Simulations & demos | `simulation.py`, `task_claim_demo.py` |
 | Tests | `tests/` |
+| Software in the loop (optional) | `sitl.py`, `geodesy.py` |
 | Design docs | `docs/` |
 
 ## Running the Project
