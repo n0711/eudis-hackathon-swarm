@@ -296,6 +296,19 @@ Initial state: `COOPERATIVE`
 | `RECONCILING` | `LOCAL_EVIDENCE_UPDATED` | stable contact and no contests | `COOPERATIVE` | `RESUME_COOPERATION` |
 | `RECONCILING` | `LOCAL_EVIDENCE_UPDATED` | contact deteriorates again | `LOCAL_AUTONOMY` | `ENTER_LOCAL_AUTONOMY` |
 | `DEGRADED` | `LOCAL_EVIDENCE_UPDATED` | stable active contact | `COOPERATIVE` | `RESUME_COOPERATION` |
+
+### MissionPhaseEFSM
+
+Initial state: `BRIEFED`
+
+| From | Event | Guard | To | Requested effects |
+| --- | --- | --- | --- | --- |
+| `BRIEFED` | `CONTRACT_RECEIVED` | contract held and minimum participants known | `EXECUTING` | — |
+| `EXECUTING` | `LOCAL_EVIDENCE_UPDATED` | contracted degradation grace elapsed under HOLD | `HOLDING` | `ENTER_LOCAL_AUTONOMY` |
+| `EXECUTING` | `LOCAL_EVIDENCE_UPDATED` | contracted degradation grace elapsed under ABORT | `ABORTED` | `STAND_DOWN_TASK` |
+| `HOLDING` | `LOCAL_EVIDENCE_UPDATED` | coordination stable for the contracted resume window | `EXECUTING` | `REQUEST_RECONCILIATION` |
+| `EXECUTING` | `LOCAL_EVIDENCE_UPDATED` | no outstanding objectives remain | `COMPLETE` | — |
+| `ABORTED` | `CONTRACT_RECEIVED` | new contract version supersedes an abort | `BRIEFED` | `REQUEST_RECONCILIATION` |
 <!-- END GENERATED TRANSITION TABLES -->
 
 ## Current limitations

@@ -25,6 +25,8 @@ from eudis_swarm.autonomy import (
     CoordinationMode,
     CoordinationPolicy,
     MachineName,
+    MissionPhase,
+    MissionPhaseEventKind,
     PeerAvailabilityConfiguration,
     PeerAvailabilityEvent,
     PeerAvailabilityEventKind,
@@ -743,6 +745,7 @@ def test_canonical_machine_definitions_cover_vocabulary_and_rendered_tables() ->
         MachineName.PEER_AVAILABILITY: {state.value for state in PeerStatus},
         MachineName.TASK_OWNERSHIP: {state.value for state in TaskOwnershipState},
         MachineName.COORDINATION_MODE: {state.value for state in CoordinationMode},
+        MachineName.MISSION_PHASE: {state.value for state in MissionPhase},
     }
     expected_events = {
         MachineName.CONTACT: {event.value for event in ContactEventKind},
@@ -751,6 +754,7 @@ def test_canonical_machine_definitions_cover_vocabulary_and_rendered_tables() ->
         },
         MachineName.TASK_OWNERSHIP: {event.value for event in TaskOwnershipEventKind},
         MachineName.COORDINATION_MODE: {event.value for event in CoordinationEventKind},
+        MachineName.MISSION_PHASE: {event.value for event in MissionPhaseEventKind},
     }
     effect_values = {effect.value for effect in AutonomyEffectKind}
     rendered = render_transition_tables()

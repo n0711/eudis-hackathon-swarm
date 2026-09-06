@@ -8,6 +8,20 @@ and interfaces change between prototypes.
 ## [Unreleased]
 
 ### Added
+- `MissionContract`: versioned, immutable operator intent carrying objective
+  priorities, a minimum-participants floor, and a degradation policy
+  (`CONTINUE`, `HOLD`, `ABORT`). Intent never rolls backwards, so a replayed
+  or reordered delivery cannot resurrect an older version. It is deliberately
+  not a plan: nothing in it says who does what, because the operator is not on
+  the network when the partition happens.
+- `MissionPhaseEFSM`, a fifth pure autonomy machine giving each UAV a mission
+  posture (`BRIEFED`, `EXECUTING`, `HOLDING`, `ABORTED`, `COMPLETE`) derived
+  from its own coordination evidence and the contract version it actually
+  holds. The phase is per-UAV: two aircraft either side of a partition may
+  legitimately disagree, and an abort is absorbing until the operator issues a
+  superseding contract.
+- An allowlist test on the knowledge boundary's transitive closure, replacing
+  reliance on a blocklist that cannot anticipate a newly added module.
 - A side-by-side belief comparison in the dashboard, replaying two runs of one
   scenario aligned by logical time. Each side shows vehicle positions and
   links, every UAV's evidence about every peer, its ownership belief per task,

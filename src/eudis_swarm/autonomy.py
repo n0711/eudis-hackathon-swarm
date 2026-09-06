@@ -12,6 +12,7 @@ from dataclasses import dataclass, replace
 from enum import Enum
 from typing import Generic, Iterable, TypeVar
 
+from .mission_contract import DegradationPolicy, MissionContract
 from .peer_state import PeerStatus
 from .task import TaskOwnershipState
 from .task_claims import ClaimFreshness, ClaimId, TaskOwnershipView
@@ -31,6 +32,7 @@ class MachineName(str, Enum):
     PEER_AVAILABILITY = "PeerAvailabilityEFSM"
     TASK_OWNERSHIP = "TaskOwnershipEFSM"
     COORDINATION_MODE = "CoordinationModeEFSM"
+    MISSION_PHASE = "MissionPhaseEFSM"
 
 
 class AutonomyEffectKind(str, Enum):
@@ -1079,6 +1081,7 @@ def machine_definitions() -> tuple[MachineDefinition, ...]:
         PEER_AVAILABILITY_MACHINE,
         TASK_OWNERSHIP_MACHINE,
         COORDINATION_MODE_MACHINE,
+        MISSION_PHASE_MACHINE,
     )
 
 
@@ -1444,3 +1447,268 @@ __all__ = [
     "transition_peer_availability",
     "transition_task_ownership",
 ]
+
+
+class MissionPhase(str, Enum):
+    """Where one UAV believes the mission stands, under the contract it holds.
+
+    This is a per-UAV posture, not a global mission state. Two UAVs on opposite
+    sides of a partition can legitimately be in different phases, and forcing
+    them to agree would need exactly the consensus a partition denies.
+    """
+
+    #: A contract is held but execution has not been authorised.
+    BRIEFED = "BRIEFED"
+    #: Working normally under the contract.
+    EXECUTING = "EXECUTING"
+    #: Degradation policy engaged: finish owned work, take nothing new.
+    HOLDING = "HOLDING"
+    #: Degradation policy engaged: release owned work and stop.
+    ABORTED = "ABORTED"
+    #: No objectives remain that this UAV can act on.
+    COMPLETE = "COMPLETE"
+
+
+class MissionPhaseEventKind(str, Enum):
+    CONTRACT_RECEIVED = "CONTRACT_RECEIVED"
+    LOCAL_EVIDENCE_UPDATED = "LOCAL_EVIDENCE_UPDATED"
+
+
+@dataclass(frozen=True, slots=True)
+class MissionPhaseVariables:
+    last_event_at: float
+    state_entered_at: float
+    contract_version: int | None = None
+    degraded_since: float | None = None
+    stable_since: float | None = None
+    participants_known: int = 0
+    objectives_outstanding: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class MissionPhaseConfiguration:
+    state: MissionPhase
+    variables: MissionPhaseVariables
+
+
+@dataclass(frozen=True, slots=True)
+class MissionPhaseEvent:
+    """Locally observable evidence, plus the contract this UAV actually holds.
+
+    ``participants_known`` counts this UAV and the peers it currently has
+    contact evidence for. It is never the true fleet size, which no UAV knows.
+    """
+
+    kind: MissionPhaseEventKind
+    timestamp: float
+    contract: MissionContract | None
+    coordination_mode: CoordinationMode
+    participants_known: int
+    objectives_outstanding: int
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.kind, MissionPhaseEventKind):
+            raise ValueError("mission phase event kind must be a MissionPhaseEventKind")
+        validate_timestamp(self.timestamp, name="mission phase event timestamp")
+        if self.contract is not None and not isinstance(self.contract, MissionContract):
+            raise ValueError("contract must be a MissionContract or None")
+        if not isinstance(self.coordination_mode, CoordinationMode):
+            raise ValueError("coordination_mode must be a CoordinationMode")
+        for name, value in (
+            ("participants_known", self.participants_known),
+            ("objectives_outstanding", self.objectives_outstanding),
+        ):
+            if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+                raise ValueError(f"{name} must be a non-negative integer")
+
+
+def initial_mission_phase_configuration(
+    timestamp: float = 0.0,
+) -> MissionPhaseConfiguration:
+    timestamp = validate_timestamp(timestamp, name="mission phase initial time")
+    return MissionPhaseConfiguration(
+        state=MissionPhase.BRIEFED,
+        variables=MissionPhaseVariables(
+            last_event_at=timestamp,
+            state_entered_at=timestamp,
+        ),
+    )
+
+
+def transition_mission_phase(
+    configuration: MissionPhaseConfiguration,
+    event: MissionPhaseEvent,
+) -> TransitionResult[MissionPhase, MissionPhaseVariables]:
+    """Advance one UAV's mission posture from its own evidence and contract.
+
+    Degradation is driven by the contract this UAV holds, so two UAVs holding
+    different contract versions may legitimately react differently to identical
+    evidence. That is the point of versioning intent instead of assuming it.
+    """
+
+    timestamp = validate_timestamp(
+        event.timestamp,
+        previous=configuration.variables.last_event_at,
+        name="mission phase transition timestamp",
+    )
+    previous_state = configuration.state
+    previous_variables = configuration.variables
+    contract = event.contract
+
+    starved = event.coordination_mode in (
+        CoordinationMode.DEGRADED,
+        CoordinationMode.LOCAL_AUTONOMY,
+    )
+    healthy = event.coordination_mode is CoordinationMode.COOPERATIVE
+    if starved:
+        degraded_since = (
+            timestamp
+            if previous_variables.degraded_since is None
+            else previous_variables.degraded_since
+        )
+        stable_since = None
+    else:
+        degraded_since = None
+        stable_since = (
+            timestamp
+            if previous_variables.stable_since is None
+            else previous_variables.stable_since
+        )
+
+    next_variables = MissionPhaseVariables(
+        last_event_at=timestamp,
+        state_entered_at=previous_variables.state_entered_at,
+        contract_version=(
+            previous_variables.contract_version
+            if contract is None
+            else contract.version
+        ),
+        degraded_since=degraded_since,
+        stable_since=stable_since,
+        participants_known=event.participants_known,
+        objectives_outstanding=event.objectives_outstanding,
+    )
+
+    next_state = previous_state
+    guard = "no contracted condition applies"
+    effects: tuple[RequestedEffect, ...] = ()
+
+    if previous_state is MissionPhase.ABORTED:
+        # An abort is absorbing. Only the operator may revive it, and only by
+        # superseding the intent that caused it -- never by inference.
+        if (
+            contract is not None
+            and contract.version != previous_variables.contract_version
+        ):
+            next_state = MissionPhase.BRIEFED
+            guard = "new contract version supersedes an abort"
+            effects = (RequestedEffect(kind=AutonomyEffectKind.REQUEST_RECONCILIATION),)
+        else:
+            guard = "abort is absorbing"
+    elif contract is None:
+        next_state = MissionPhase.BRIEFED
+        guard = "no contract held"
+    elif previous_state is MissionPhase.BRIEFED:
+        if event.participants_known < contract.minimum_participants:
+            guard = "known participants below the contracted minimum"
+        else:
+            next_state = MissionPhase.EXECUTING
+            guard = "contract held and minimum participants known"
+    elif event.objectives_outstanding == 0:
+        next_state = MissionPhase.COMPLETE
+        guard = "no outstanding objectives remain"
+    elif previous_state is MissionPhase.COMPLETE:
+        next_state = MissionPhase.EXECUTING
+        guard = "new objectives became outstanding"
+    elif (
+        starved
+        and degraded_since is not None
+        and timestamp - degraded_since > contract.degraded_grace
+        and contract.degradation_policy is DegradationPolicy.HOLD
+    ):
+        next_state = MissionPhase.HOLDING
+        guard = "contracted degradation grace elapsed under HOLD"
+        effects = (RequestedEffect(kind=AutonomyEffectKind.ENTER_LOCAL_AUTONOMY),)
+    elif (
+        starved
+        and degraded_since is not None
+        and timestamp - degraded_since > contract.degraded_grace
+        and contract.degradation_policy is DegradationPolicy.ABORT
+    ):
+        next_state = MissionPhase.ABORTED
+        guard = "contracted degradation grace elapsed under ABORT"
+        effects = (RequestedEffect(kind=AutonomyEffectKind.STAND_DOWN_TASK),)
+    elif previous_state is MissionPhase.HOLDING:
+        stable_for = 0.0 if stable_since is None else timestamp - stable_since
+        if healthy and stable_for >= contract.resume_after_stable_for:
+            next_state = MissionPhase.EXECUTING
+            guard = "coordination stable for the contracted resume window"
+            effects = (RequestedEffect(kind=AutonomyEffectKind.REQUEST_RECONCILIATION),)
+        else:
+            guard = "still holding under contract policy"
+    else:
+        next_state = MissionPhase.EXECUTING
+        guard = "executing under contract"
+
+    if next_state is not previous_state:
+        next_variables = replace(next_variables, state_entered_at=timestamp)
+    else:
+        effects = ()
+
+    version = next_variables.contract_version
+    reason = (
+        f"contract v{'-' if version is None else version}, "
+        f"mode={event.coordination_mode.value}, "
+        f"participants={event.participants_known}, "
+        f"outstanding={event.objectives_outstanding}"
+    )
+    return TransitionResult(next_state, next_variables, effects, guard, reason)
+
+
+MISSION_PHASE_MACHINE = MachineDefinition(
+    name=MachineName.MISSION_PHASE,
+    states=tuple(state.value for state in MissionPhase),
+    initial_state=MissionPhase.BRIEFED.value,
+    rules=(
+        TransitionRule(
+            "BRIEFED",
+            "CONTRACT_RECEIVED",
+            "contract held and minimum participants known",
+            "EXECUTING",
+        ),
+        TransitionRule(
+            "EXECUTING",
+            "LOCAL_EVIDENCE_UPDATED",
+            "contracted degradation grace elapsed under HOLD",
+            "HOLDING",
+            ("ENTER_LOCAL_AUTONOMY",),
+        ),
+        TransitionRule(
+            "EXECUTING",
+            "LOCAL_EVIDENCE_UPDATED",
+            "contracted degradation grace elapsed under ABORT",
+            "ABORTED",
+            ("STAND_DOWN_TASK",),
+        ),
+        TransitionRule(
+            "HOLDING",
+            "LOCAL_EVIDENCE_UPDATED",
+            "coordination stable for the contracted resume window",
+            "EXECUTING",
+            ("REQUEST_RECONCILIATION",),
+        ),
+        TransitionRule(
+            "EXECUTING",
+            "LOCAL_EVIDENCE_UPDATED",
+            "no outstanding objectives remain",
+            "COMPLETE",
+        ),
+        TransitionRule(
+            "ABORTED",
+            "CONTRACT_RECEIVED",
+            "new contract version supersedes an abort",
+            "BRIEFED",
+            ("REQUEST_RECONCILIATION",),
+        ),
+    ),
+)
