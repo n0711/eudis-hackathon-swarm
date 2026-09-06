@@ -51,8 +51,13 @@ through lease expiry, which requires no agreement at all.
 **Consensus-free recovery keeps working in exactly the conditions that make
 consensus impossible.** A third aircraft restores the quorum and both modes
 recover, which confirms the floor is about witness count rather than about the
-control model. Full tables and limits:
-[`docs/measured_results.md`](docs/measured_results.md).
+control model.
+
+This is not a property of one contrived pair. Across 440 runs with four
+aircraft and a jammer, central control failed 68 missions and distributed
+failed none, while the two modes detected losses *identically* at every
+communication range — the same awareness, opposite outcomes. Full tables and
+limits: [`docs/measured_results.md`](docs/measured_results.md).
 
 [![CI](https://github.com/n0711/eudis-swarm/actions/workflows/ci.yml/badge.svg)](https://github.com/n0711/eudis-swarm/actions/workflows/ci.yml)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue)](https://www.python.org/downloads/)

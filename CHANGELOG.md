@@ -8,6 +8,16 @@ and interfaces change between prototypes.
 ## [Unreleased]
 
 ### Added
+- A 440-run population result in `docs/measured_results.md`: eleven
+  communication ranges, twenty seeds, both control modes, with a jammer. Central
+  control failed 68 of 220 missions and distributed failed none, while the two
+  modes detected losses identically at every range. It is the four-aircraft
+  population version of the two-aircraft demonstration, and it shows the same
+  thing: identical awareness, opposite outcomes.
+- A qualification on the detection cliff. The original sweep had no jammer; with
+  one the same detector degrades as a smooth gradient rather than a cliff. Both
+  shapes are real, and the cliff belongs to the scenario rather than to the
+  detector.
 - `docs/sitl.md`, preparing a software-in-the-loop path against real autopilot
   firmware. It fixes the rules first: a SITL run may never produce a measured
   result, MAVLink bindings live behind an optional extra, and telemetry enters

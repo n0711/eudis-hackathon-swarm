@@ -31,6 +31,12 @@ eudis-swarm-sweep --param communication-range --from 50 --to 130 --steps 9 --see
 
 Detection fails as a cliff between 78 and 75, not as a gradient.
 
+**In a clean RF environment.** The sweep above has no jammer. Repeat it with
+one (section 5) and the same detector degrades smoothly instead: every seed
+undetected at range 30-40, 18 of 20 at 50, 8 at 60, 2 at 70, none at 80 and
+above. The cliff is a property of the scenario, not of the detector, and both
+shapes are real.
+
 **Why this matters.** At 75 and below the aircraft stops at `t=4.00 s` and is
 never declared. Its coordinator status stays `ACTIVE` for the whole mission, no
 task is released, and all twenty tasks still complete because ownership leases
@@ -147,6 +153,53 @@ floor is about witness count rather than about the control model.
 
 This is the sharpest argument in the project: **consensus-free recovery keeps
 working in exactly the conditions that make consensus impossible.**
+
+## 5. Central control has a connectivity threshold; distributed does not
+
+440 runs: eleven communication ranges, twenty seeds each, both control modes,
+with a circular jammer. This is the four-aircraft population version of the
+two-aircraft demonstration in section 4.
+
+```bash
+eudis-swarm-sweep --param communication-range --from 30 --to 130 --steps 11 --seeds 20   --jammer 40,50,15,3,8 --task-control distributed --output distributed.csv
+eudis-swarm-sweep --param communication-range --from 30 --to 130 --steps 11 --seeds 20   --jammer 40,50,15,3,8 --task-control centralized --output centralized.csv
+```
+
+**Centralized failed 68 of 220 missions. Distributed failed none.**
+
+| range | centralized completed | distributed completed | centralized duration | distributed duration |
+| ---: | ---: | ---: | ---: | ---: |
+| 30 | **0/20** | 20/20 | 300.00 s | 13.89 s |
+| 40 | **0/20** | 20/20 | 300.00 s | 13.15 s |
+| 50 | **2/20** | 20/20 | 270.98 s | 12.40 s |
+| 60 | 12/20 | 20/20 | 127.40 s | 12.43 s |
+| 70 | 18/20 | 20/20 | 41.62 s | 12.43 s |
+| 80 | 20/20 | 20/20 | 12.88 s | 12.43 s |
+| 130 | 20/20 | 20/20 | 13.34 s | 12.43 s |
+
+A failed centralized mission is not a partial one: it completes 19 of 20 tasks
+and then burns the remaining 300-second budget holding the last task assigned to
+an aircraft it cannot reach. Dropped-ownership time at range 30 is 297.4
+task-seconds, against 1.8 for distributed.
+
+**Detection is the same in both modes, at every range.** Aircraft lost, declared
+and never detected are near-identical across the two sweeps:
+
+| range | undetected (centralized) | undetected (distributed) |
+| ---: | ---: | ---: |
+| 30 | 20/20 seeds | 20/20 seeds |
+| 50 | 18/20 | 18/20 |
+| 60 | 8/20 | 8/20 |
+| 70 | 2/20 | 2/20 |
+| 80+ | 0 | 0 |
+
+That is the whole argument, in one population rather than one demo: **the two
+control models have identical awareness and opposite outcomes.** What separates
+them is not what they know but whether acting on it required agreement.
+
+Distributed is also flat above range 60 — 0.037 task-seconds double-booked,
+1.700 dropped, 12.43 s duration, unchanged from 60 to 130 — so its behaviour
+stops depending on connectivity well before central control stops failing.
 
 ## Reproducibility
 
