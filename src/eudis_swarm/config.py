@@ -28,6 +28,7 @@ class SimulationConfig:
     failure_timeout: float = 2.5
     peer_state_stale_after: float = 2.5
     allocation_policy: str = "distance"
+    task_control: str = "distributed"
     claim_lease_duration: float = 2.5
     failure_agent_id: int = 2
     failure_time: float = 4.0
@@ -54,6 +55,8 @@ class SimulationConfig:
             )
         if self.allocation_policy not in {"distance", "connectivity"}:
             raise ValueError("allocation_policy must be 'distance' or 'connectivity'")
+        if self.task_control not in {"distributed", "centralized"}:
+            raise ValueError("task_control must be 'distributed' or 'centralized'")
         if self.link_model not in {"range", "radio"}:
             raise ValueError("link_model must be 'range' or 'radio'")
         if not isinstance(self.stochastic_delivery, bool):

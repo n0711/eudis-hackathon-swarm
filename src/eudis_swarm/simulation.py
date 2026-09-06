@@ -247,7 +247,7 @@ class Simulation:
             ),
             metrics=metrics,
             task_claim_stores=self.task_claim_stores,
-            distributed_task_control=True,
+            distributed_task_control=(config.task_control == "distributed"),
         )
         self._history: dict[int, list[tuple[float, Position]]] = {
             agent.agent_id: [(0.0, agent.position)] for agent in selected_agents
@@ -766,7 +766,16 @@ class Simulation:
         return activated
 
     def _exchange_claim_evidence(self, timestamp: float) -> None:
-        """Run deterministic local claim/gossip/reconcile/execute rounds."""
+        """Run one task-control round in whichever mode is configured.
+
+        The centralized branch is the comparison baseline: one coordinator with
+        a consistent global view hands out every assignment, which is exactly
+        the assumption a partition invalidates.
+        """
+
+        if self.config.task_control == "centralized":
+            self.mission.allocate_tasks(timestamp)
+            return
 
         participants = self._participating_agent_ids()
         for agent_id in participants:
@@ -1243,6 +1252,15 @@ SCENARIO_PRESETS: dict[str, dict[str, object]] = {
         "region_jammer": RegionJammer(40.0, 50.0, 15.0, 3.0, 8.0),
         "failure_time": 1000.0,
     },
+    # The same partition under one central coordinator, for side-by-side
+    # comparison. It never double-books, because it assumes a consistent
+    # global view; it strands work instead, which is the assumption failing.
+    "baseline": {
+        "communication_range": 50.0,
+        "region_jammer": RegionJammer(40.0, 50.0, 15.0, 3.0, 8.0),
+        "failure_time": 1000.0,
+        "task_control": "centralized",
+    },
 }
 
 
@@ -1308,6 +1326,13 @@ def _parser() -> argparse.ArgumentParser:
         default=None,
         metavar="A:B",
         help="permanently block the undirected link between UAVs A and B (repeatable)",
+    )
+    parser.add_argument(
+        "--task-control",
+        choices=("distributed", "centralized"),
+        default="distributed",
+        help="distributed replicated ownership, or the centralized coordinator "
+        "baseline that assumes one consistent global view",
     )
     parser.add_argument(
         "--scenario",
@@ -1405,6 +1430,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             failure_timeout=arguments.failure_timeout,
             peer_state_stale_after=arguments.peer_state_stale_after,
             allocation_policy=arguments.allocation_policy,
+            task_control=arguments.task_control,
             communication_range=arguments.communication_range,
             link_model=arguments.link_model,
             stochastic_delivery=arguments.stochastic_delivery,

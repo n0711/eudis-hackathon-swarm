@@ -142,3 +142,55 @@ def test_the_trace_carries_the_running_wasted_work_counter() -> None:
     assert running == sorted(running), "a time integral must never decrease"
     assert running[0] == 0.0
     assert running[-1] > 0.0
+
+
+# --------------------------------------------------------------------------
+# centralized baseline
+# --------------------------------------------------------------------------
+
+
+def test_the_baseline_preset_runs_the_centralized_coordinator() -> None:
+    assert SCENARIO_PRESETS["baseline"]["task_control"] == "centralized"
+
+    metrics = Simulation(_config("baseline")).run().metrics
+
+    assert metrics.mission_completed is True
+    assert metrics.completed_task_count == 20
+
+
+def test_the_two_control_modes_fail_in_opposite_ways() -> None:
+    """The comparison the split-screen view exists to show.
+
+    A central coordinator serialises every assignment, so two UAVs never both
+    believe they own a task -- but it hands work to UAVs it cannot reach, and
+    that work sits stranded. Replicated ownership strands nothing, and pays for
+    it with occasional double-booking during a partition. Neither is simply
+    better, which is the point.
+    """
+
+    centralized = Simulation(_config("baseline")).run().metrics
+    distributed = Simulation(_config("demo-partition")).run().metrics
+
+    # both finish the mission
+    assert centralized.completed_task_count == distributed.completed_task_count == 20
+
+    # the central coordinator never double-books...
+    assert centralized.concurrent_ownership_duration == 0.0
+    # ...but strands work it cannot deliver
+    assert centralized.dropped_ownership_time > 0.0
+
+    # replicated ownership is the mirror image
+    assert distributed.concurrent_ownership_duration > 0.0
+    assert distributed.dropped_ownership_time == 0.0
+
+
+def test_the_control_mode_is_configurable_and_validated() -> None:
+    assert _parser().parse_args([]).task_control == "distributed"
+    assert (
+        _parser().parse_args(["--task-control", "centralized"]).task_control
+        == "centralized"
+    )
+    with pytest.raises(SystemExit):
+        _parser().parse_args(["--task-control", "anarchy"])
+    with pytest.raises(ValueError, match="task_control"):
+        replace(SimulationConfig(), task_control="anarchy")

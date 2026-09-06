@@ -8,6 +8,13 @@ and interfaces change between prototypes.
 ## [Unreleased]
 
 ### Added
+- `SimulationConfig.task_control` and `--task-control`, selecting replicated
+  distributed ownership or the centralized coordinator baseline. `Mission`
+  already contained the complete centralized path behind
+  `distributed_task_control`; nothing could reach it from `Simulation`, so no
+  side-by-side comparison was possible.
+- A `baseline` scenario preset: the `demo-partition` scenario under central
+  control, for the left-hand panel of the comparison view.
 - `--scenario` presets so each demonstration is one command: `demo-failstop`
   (range 130, UAV 2 dies at t=4, quorum detects it) and `demo-partition`
   (range 50, a region jammer that splits the swarm into two components of two
