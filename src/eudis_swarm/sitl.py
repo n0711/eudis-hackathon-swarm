@@ -35,7 +35,9 @@ def _require_mavutil() -> Any:
     """Import pymavlink on demand, or explain precisely what is missing."""
 
     try:
-        from pymavlink import mavutil
+        # The `sitl` extra is deliberately absent from the default and CI
+        # installs, so a type checker cannot resolve this import there.
+        from pymavlink import mavutil  # pyright: ignore[reportMissingImports]
     except ModuleNotFoundError as error:  # pragma: no cover - needs the extra absent
         raise ModuleNotFoundError(_MISSING_DEPENDENCY) from error
     return mavutil
