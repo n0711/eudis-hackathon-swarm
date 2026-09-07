@@ -1,9 +1,44 @@
 """Pure, receiver-local extended finite-state machines for swarm autonomy.
 
-The machines in this module consume typed events containing only evidence that
-one UAV could possess.  They do not import the simulator, communication graph,
-mission, or mutable remote agents.  Transition functions are pure; the small
-``LocalAutonomyKernel`` applies their results and retains observer-only records.
+This file is large but shallow: it is **five independent state machines side by
+side**, not one big one. They only meet inside :class:`LocalAutonomyKernel` at
+the end. The import list is deliberately short and cannot reach world truth --
+that restriction is enforced by a test.
+
+Every machine follows the same five-part shape, so learning one is learning all:
+
+1. a ``*State`` / posture ``Enum`` -- the finite control states;
+2. a ``*EventKind`` ``Enum`` -- the input alphabet (all locally observable);
+3. a frozen ``*Variables`` dataclass -- bounded extended state (counters are
+   capped at ``MAX_EFSM_COUNTER``), paired with its state as a ``*Configuration``;
+4. a pure ``transition_*(configuration, event[, policy])`` function returning a
+   :class:`TransitionResult` (next state, next variables, requested effects,
+   and human-readable ``guard`` / ``reason`` strings). It performs no I/O and
+   mutates nothing;
+5. a module-level ``*_MACHINE`` :class:`MachineDefinition` -- the same rules
+   written out as a table, rendered to docs by :func:`render_transition_tables`.
+
+Effects (:class:`RequestedEffect`) are *requests*, never actions: a transition
+asks for ``REQUEST_RECONCILIATION`` or ``STAND_DOWN_TASK``; the simulation
+decides what to do with that.
+
+The five machines, in composition order:
+
+* **ContactEFSM** (one per peer) -- infers link health from receipt timing:
+  ``UNKNOWN/ACTIVE/DEGRADED/LOST/RECOVERING``.
+* **PeerAvailabilityEFSM** (one per peer) -- mirrors ``PeerStateStore`` status:
+  ``HEARD/SILENT/DECLARED_FAILED``.
+* **TaskOwnershipEFSM** (one per task) -- a conformance projection of the claim
+  store's six-state ``TaskOwnershipState``.
+* **CoordinationModeEFSM** (one per UAV) -- how much this UAV may lean on remote
+  coordination: ``COOPERATIVE/DEGRADED/LOCAL_AUTONOMY/RECONCILING``.
+* **MissionPhaseEFSM** (one per UAV, defined after ``__all__`` at end of file)
+  -- posture under the held :class:`~eudis_swarm.mission_contract.MissionContract`:
+  ``BRIEFED/EXECUTING/HOLDING/ABORTED/COMPLETE``.
+
+``LocalAutonomyKernel`` owns one configuration per machine instance, feeds them
+delivered evidence, applies the pure results, and keeps an ordered list of
+observer-only :class:`TransitionRecord` entries for tracing.
 """
 
 from __future__ import annotations
@@ -23,6 +58,11 @@ from .validation import (
 )
 
 MAX_EFSM_COUNTER = 65_535
+
+
+# ======================================================================
+# Shared vocabulary: types every machine's transition function returns.
+# ======================================================================
 
 
 class MachineName(str, Enum):
@@ -116,6 +156,11 @@ class MachineDefinition:
     states: tuple[str, ...]
     initial_state: str
     rules: tuple[TransitionRule, ...]
+
+
+# ======================================================================
+# ContactEFSM -- one per peer. Link health inferred from receipt timing.
+# ======================================================================
 
 
 class ContactState(str, Enum):
@@ -321,6 +366,11 @@ def transition_contact(
     return TransitionResult(next_state, next_variables, effects, guard, reason)
 
 
+# ======================================================================
+# PeerAvailabilityEFSM -- one per peer. Mirrors PeerStateStore's status.
+# ======================================================================
+
+
 class PeerAvailabilityEventKind(str, Enum):
     """Inputs that already exist in ``PeerStateStore`` semantics."""
 
@@ -425,6 +475,12 @@ def transition_peer_availability(
         else ()
     )
     return TransitionResult(next_state, next_variables, effects, guard, reason)
+
+
+# ======================================================================
+# TaskOwnershipEFSM -- one per task. Conformance projection of the claim
+# store's six-state view; it does not re-validate claims.
+# ======================================================================
 
 
 class TaskOwnershipEventKind(str, Enum):
@@ -614,6 +670,12 @@ def transition_task_ownership(
         guard,
         reason,
     )
+
+
+# ======================================================================
+# CoordinationModeEFSM -- one per UAV. How far it may lean on remote
+# coordination, from its own composed contact/contest evidence.
+# ======================================================================
 
 
 class CoordinationMode(str, Enum):
@@ -872,6 +934,12 @@ def transition_coordination_mode(
     return TransitionResult(next_state, next_variables, effects, guard, reason)
 
 
+# ======================================================================
+# Machine definition tables -- the rules above, written out for
+# render_transition_tables() -> docs/autonomy_efsm.md. Kept in sync with
+# the transition functions by the tests in tests/test_autonomy_efsm.py.
+# ======================================================================
+
 CONTACT_MACHINE = MachineDefinition(
     name=MachineName.CONTACT,
     states=tuple(state.value for state in ContactState),
@@ -1116,6 +1184,12 @@ def render_transition_tables() -> str:
         )
         sections.append("")
     return "\n".join(sections).rstrip() + "\n"
+
+
+# ======================================================================
+# Composition kernel -- the only place the five machines meet. Owns one
+# configuration per instance, applies pure results, records transitions.
+# ======================================================================
 
 
 class LocalAutonomyKernel:
@@ -1540,6 +1614,12 @@ __all__ = [
     "transition_peer_availability",
     "transition_task_ownership",
 ]
+
+
+# ======================================================================
+# MissionPhaseEFSM -- one per UAV. Defined here, after __all__, because it
+# is the newest machine; LocalAutonomyKernel above already composes it.
+# ======================================================================
 
 
 class MissionPhase(str, Enum):

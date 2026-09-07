@@ -1,7 +1,19 @@
 """Represent authoritative UAV state and simple two-dimensional movement.
 
-Agents publish immutable snapshots, while remote reasoning must use only copies
-that the modeled network delivers into receiver-local stores.
+This module is world truth: an :class:`Agent` is where an aircraft *actually*
+is and whether it is *actually* flying. It is the boundary every other module is
+defined against -- nothing here may be read by decision logic. A UAV reasons
+only from :class:`Heartbeat` copies the modeled network delivers into its
+receiver-local stores.
+
+Two distinctions carry most of the project's meaning and are enforced here:
+
+* ``responsive`` (physical: is the vehicle moving and transmitting?) is separate
+  from ``status`` (belief: what the swarm has concluded). ``declare_failed()``
+  sets the belief and never touches the physics, so a wrongly declared UAV
+  keeps flying and keeps its task -- see :attr:`Agent.wrongly_declared`.
+* ``current_task`` is an execution-intent cache, not ownership authority.
+  Authority lives in each UAV's :class:`~eudis_swarm.task_claims.TaskClaimStore`.
 """
 
 from __future__ import annotations
@@ -27,12 +39,23 @@ class AgentStatus(str, Enum):
 
 @dataclass(frozen=True, slots=True)
 class Heartbeat:
-    """A timestamped state snapshot advertised by one UAV."""
+    """A timestamped state snapshot advertised by one UAV.
 
+    This is the only thing a UAV broadcasts about itself, and the only first-hand
+    evidence its peers ever get. Immutable, so a delivered copy cannot drift from
+    what was sent.
+    """
+
+    #: Which UAV this describes.
     agent_id: int
+    #: Its position at emission, in world coordinates.
     position: Position
+    #: Its coordinator-visible state at emission.
     status: AgentStatus
+    #: The task it was executing, or ``None``.
     current_task: int | None
+    #: Source-clock emission time. Receivers judge freshness by their own
+    #: receipt time instead, because clocks may skew.
     timestamp: float
 
     def __post_init__(self) -> None:
@@ -72,13 +95,23 @@ def advance_point_mass(
 class Agent:
     """A point-mass UAV whose ``current_task`` is an intent, not authority."""
 
+    #: Stable identity, 1-based.
     agent_id: int
+    #: Current world position; mutated by :meth:`move_toward`.
     position: Position
+    #: Constant ground speed, metres per simulated second.
     speed: float
+    #: Coordinator-visible state (belief). Set to FAILED by
+    #: :meth:`declare_failed` without any physical effect.
     status: AgentStatus = AgentStatus.IDLE
+    #: Execution-intent cache -- what this UAV is heading for. Not ownership.
     current_task: int | None = None
+    #: Source-clock time of the last heartbeat this UAV emitted.
     last_heartbeat: float = 0.0
+    #: Physical truth: ``False`` means the vehicle has stopped and gone silent.
+    #: Only :meth:`inject_failure` clears it; a declaration never does.
     responsive: bool = True
+    #: When ``inject_failure`` fired, for observer accounting.
     failure_injected_at: float | None = None
 
     def __post_init__(self) -> None:

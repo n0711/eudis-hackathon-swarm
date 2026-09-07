@@ -331,6 +331,23 @@ and interfaces change between prototypes.
 - Connected topology now means protocol evidence can converge without direct
   all-to-all links. Physical link availability remains world truth and is never
   copied into `PeerStateStore`.
+- The dated design records (`docs/prototype_0_1.md` … `prototype_0_3a.md` and
+  `docs/code_quality_and_performance.md`) moved under `docs/history/`. They
+  describe the system at past milestones, not as it is now, and were crowding
+  the `docs/` index that a new contributor reads first. `docs/milestones.md`
+  remains the current development narrative.
+- Expanded the in-code comments on the six onboarding-path modules (`config.py`,
+  `agent.py`, `peer_state.py`, `task_claims.py`, `autonomy.py`, `simulation.py`)
+  so the module docstrings and section markers carry the orientation a new
+  reader needs. No behaviour change.
+
+### Removed
+
+- The legacy `--visualize` matplotlib final-frame view, its
+  `src/eudis_swarm/visualization.py` module, and the `visualization` optional
+  extra. It drew one static frame and was superseded by the trace-playback
+  dashboard (`eudis-swarm-dashboard`); no test or measured result depended on
+  it. The full optional install is now `.[dev,dashboard]`.
 
 ### Fixed
 

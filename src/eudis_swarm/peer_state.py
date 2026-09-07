@@ -1,7 +1,24 @@
 """Store the evidence that one UAV has actually received about its peers.
 
-Snapshot freshness, observed silence, and protocol-backed failure are kept
-separate so silence can never silently become physical failure.
+One :class:`PeerStateStore` belongs to one UAV and holds only what the network
+delivered to it -- delivered heartbeats, locally observed silence, and
+quorum-backed failure certificates. There is one store per UAV; they are never
+merged, so a partitioned UAV's store simply stops advancing.
+
+The store keeps two independent axes rather than one "is this peer alive?"
+verdict:
+
+* :class:`PeerKnowledgeState` -- *freshness* of the last delivered snapshot:
+  ``UNKNOWN`` -> ``FRESH`` -> ``STALE`` purely by receiver-local age.
+* :class:`PeerStatus` -- the *interpretation* offered to callers: ``HEARD``,
+  ``SILENT``, or ``DECLARED_FAILED``.
+
+Keeping them separate is the point: silence (``STALE`` / ``SILENT``) can never
+turn into physical failure on its own. Only a validated quorum certificate
+produces ``DECLARED_FAILED``, and a single fresh heartbeat outranks it
+(:meth:`PeerStateStore.receive` -> ``retracted_peer_ids``). All ageing uses
+``local_now - received_at``; the source clock in the snapshot is never trusted
+for timing.
 """
 
 from __future__ import annotations
@@ -21,16 +38,24 @@ from .validation import (
 class PeerKnowledgeState(str, Enum):
     """Freshness of one receiver's last successfully delivered peer snapshot."""
 
+    #: Nothing has ever been delivered from this peer.
     UNKNOWN = "UNKNOWN"
+    #: A snapshot was delivered within ``stale_after`` receiver-local seconds.
     FRESH = "FRESH"
+    #: A snapshot exists but is older than ``stale_after``.
     STALE = "STALE"
 
 
 class PeerStatus(str, Enum):
     """Receiver-local interpretation of the available peer evidence."""
 
+    #: A fresh snapshot and no unresolved silence: first-hand contact.
     HEARD = "HEARD"
+    #: Stale, timed-out, or never heard. Ambiguous by design -- jammed and
+    #: destroyed look identical from here.
     SILENT = "SILENT"
+    #: A valid quorum certificate has been applied. Belief only; a later
+    #: first-hand heartbeat overrides it.
     DECLARED_FAILED = "DECLARED_FAILED"
 
 

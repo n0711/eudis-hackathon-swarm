@@ -1,4 +1,26 @@
-"""Central configuration for the deterministic swarm simulation."""
+"""Central configuration for the deterministic swarm simulation.
+
+Every knob the simulator has lives on ``SimulationConfig``. Read it as a table
+of contents for the whole system: each field names a behaviour, and the module
+that consumes it is noted below. The dataclass is ``frozen`` -- a run cannot
+reconfigure itself midway -- and ``__post_init__`` rejects any combination that
+would make a run ill-defined rather than letting it fail obscurely later.
+
+The fields fall into five groups:
+
+* **scenario size and geometry** -- how many UAVs and tasks, the play area, and
+  the seed that places the tasks;
+* **motion and mission timing** -- speed, the fixed simulator step, and how
+  close counts as "arrived";
+* **failure detection** -- the heartbeat cadence and the silence thresholds
+  that feed :mod:`eudis_swarm.peer_state` and
+  :mod:`eudis_swarm.failure_manager`;
+* **control model** -- ``allocation_policy`` / ``task_control`` select
+  distributed claim ownership or the centralized-coordinator baseline, plus the
+  optional versioned :class:`~eudis_swarm.mission_contract.MissionContract`;
+* **communication impairment** -- the link model, an optional radio model,
+  statically blocked links, a region jammer, and a per-UAV comms outage window.
+"""
 
 from __future__ import annotations
 
@@ -17,35 +39,89 @@ from .validation import (
 class SimulationConfig:
     """Validated parameters for a deterministic simulation run."""
 
+    # --- scenario size and geometry ---
+    #: Number of UAVs. IDs are 1..agent_count. The first four start in the area
+    #: corners; any beyond that go on a ring (simulation._initial_positions).
     agent_count: int = 4
+    #: Number of mission tasks. IDs are 1..task_count.
     task_count: int = 20
+    #: Seed for the one RNG in the build: task placement only. Nothing else in
+    #: the simulator uses randomness unless ``stochastic_delivery`` is set.
     random_seed: int = 2026
+    #: Play-area size in abstract metres. Task positions are sampled inside a
+    #: 10% margin; UAV corner positions sit in a 5% margin.
     area_width: float = 100.0
     area_height: float = 100.0
+
+    # --- motion and mission timing ---
+    #: UAV ground speed (metres per simulated second), identical for every UAV.
     agent_speed: float = 10.0
+    #: Fixed spacing of motion/mission boundaries. The event loop still jumps
+    #: straight to the next scheduled event; this only sets the motion cadence.
     time_step: float = 0.25
+    #: Distance within which a moving UAV counts as having reached its task.
     completion_tolerance: float = 0.75
+
+    # --- failure detection (feeds peer_state + failure_manager) ---
+    #: How often each UAV emits a heartbeat snapshot.
     heartbeat_interval: float = 1.0
+    #: Receiver-local silence age after which a detector replica may vote a peer
+    #: failed. Must be >= heartbeat_interval.
     failure_timeout: float = 2.5
+    #: Receiver-local age after which a delivered peer snapshot is treated as
+    #: STALE rather than FRESH in PeerStateStore.
     peer_state_stale_after: float = 2.5
+
+    # --- control model ---
+    #: Scoring policy for task selection: "distance" (nearest) or
+    #: "connectivity" (prefer tasks that keep predicted peer degree up).
     allocation_policy: str = "distance"
+    #: "distributed" replicated claim ownership (the operational model), or
+    #: "centralized" -- the single-coordinator comparison baseline.
     task_control: str = "distributed"
+    #: Optional operator intent briefed to every UAV before launch. ``None``
+    #: means no contracted degradation policy (UAVs are unconstrained).
     mission_contract: MissionContract | None = None
     #: An amendment issued mid-mission to one UAV, which must then reach the
     #: rest as evidence. Across a partition, it will not.
     contract_amendment: MissionContract | None = None
+    #: When the amendment is handed to that one UAV.
     contract_amendment_time: float = 6.0
+    #: Which UAV the operator reaches with the amendment.
     contract_amendment_agent_id: int = 1
+    #: Lease length for a task claim. A claim older than this (receiver-local)
+    #: is EXPIRED and the task is free to re-claim; freshness_timeout defaults
+    #: to half this. This is the knob the two quorum-floor presets differ on.
     claim_lease_duration: float = 2.5
+
+    # --- injected fault schedule ---
+    #: UAV made silent and immobile at ``failure_time`` (a real stop, not a
+    #: declaration). Set failure_time huge to disable.
     failure_agent_id: int = 2
     failure_time: float = 4.0
+    #: Hard wall-clock ceiling on simulated time; the run ends unfinished if hit.
     max_simulation_time: float = 300.0
+
+    # --- communication impairment ---
+    #: With link_model="range", the max distance for an active link. Ignored by
+    #: link_model="radio".
     communication_range: float = 130.0
+    #: "range" distance threshold (default) or "radio" free-space line-of-sight
+    #: bit-error-rate model. Not calibrated RF -- see the module docstrings.
     link_model: str = "range"
+    #: With link_model="radio", sample each link up/down from its delivery
+    #: probability using ``random_seed``. Requires link_model="radio".
     stochastic_delivery: bool = False
+    #: Parameters for the optional radio model (used only when link_model="radio").
     radio_model: RadioModel = field(default_factory=RadioModel)
+    #: Undirected UAV-ID pairs whose link is permanently down. Normalised to
+    #: sorted, deduplicated tuples in ``__post_init__``.
     blocked_links: frozenset[tuple[int, int]] = frozenset()
+    #: Optional circular jamming region: links crossing the disc are down while
+    #: it is active.
     region_jammer: RegionJammer | None = None
+    #: One UAV fully comms-isolated for a window (distinct from a physical
+    #: failure: the UAV keeps flying and its own software keeps running).
     comm_fault_agent_id: int | None = None
     comm_fault_start: float = 4.0
     comm_fault_end: float = 8.0

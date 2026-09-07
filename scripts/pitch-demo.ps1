@@ -29,7 +29,7 @@ if (-not (Test-Path $exe)) {
     Write-Host "Could not find $exe" -ForegroundColor Red
     Write-Host "Create the environment first:" -ForegroundColor Yellow
     Write-Host "  python -m venv .venv" -ForegroundColor Yellow
-    Write-Host "  .\.venv\Scripts\python.exe -m pip install -e `".[dev,visualization,dashboard]`"" -ForegroundColor Yellow
+    Write-Host "  .\.venv\Scripts\python.exe -m pip install -e `".[dev,dashboard]`"" -ForegroundColor Yellow
     exit 1
 }
 

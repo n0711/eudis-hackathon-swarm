@@ -1,7 +1,46 @@
 """Orchestrate deterministic world physics, network delivery, and local evidence.
 
-World truth advances the simulation while agent decisions receive only self-state,
-receiver-local time, and evidence the modeled network actually delivered.
+Read this last. It is the loop that drives every other module, and it only makes
+sense once the pieces it wires together do.
+
+**What ``Simulation`` owns.** World truth -- the real :class:`~eudis_swarm.agent.Agent`
+positions, the live :class:`~eudis_swarm.communication.CommunicationGraph`, the
+one logical clock, the injected fault schedule -- plus one *private* set of
+receiver-local stores per UAV: a :class:`~eudis_swarm.peer_state.PeerStateStore`,
+a :class:`~eudis_swarm.task_claims.TaskClaimStore`, and a
+:class:`~eudis_swarm.autonomy.LocalAutonomyKernel`. The stores never see world
+truth; they are fed only what a transport delivered.
+
+**The event loop is event-driven, not fixed-step.** Each iteration jumps
+straight to the next scheduled instant -- the next motion tick, the next
+heartbeat, an injected failure, a comms-fault edge, a jammer edge -- so there
+are no empty ticks. Every instant is one of two kinds:
+
+* a **mission boundary** (motion / heartbeat / failure / time-limit due):
+  agents physically move, then the full pipeline below runs;
+* a **communication-only boundary** (a jammer or fault edge between mission
+  ticks): positions are *projected* without mutating agents, the graph and
+  peer freshness update, a trace frame is captured, and nothing else -- an
+  observational instant must not create extra completions or allocations.
+
+**The mission-boundary pipeline, in order** (see :meth:`Simulation.run`):
+
+1. inject failure / start / end comms fault if due;
+2. update the communication graph from current positions;
+3. age peer-state freshness;
+4. emit + deliver heartbeats (one-hop only);
+5. maybe hand out a contract amendment;
+6. exchange failure votes / declarations, then recover;
+7. propagate any contract amendment further;
+8. run one task-control round -- :meth:`_exchange_claim_evidence`: in
+   distributed mode this is the claim create/gossip/reconcile/activate fixpoint;
+   in centralized mode it is one coordinator allocation;
+9. complete arrivals; if any completed, run the task round again;
+10. let the out-of-band evaluator read every replica; record positions; assert
+    invariants; capture a trace frame; check for mission end.
+
+Ordering matters and is asserted by tests: evidence is published before recovery
+acts on it, and recovery before new allocation.
 """
 
 from __future__ import annotations
@@ -157,6 +196,11 @@ class Simulation:
             stochastic_links=config.stochastic_delivery,
             link_seed=config.random_seed,
         )
+        # One private set of receiver-local state per UAV, keyed by owner ID.
+        # These three dicts are the heart of the "decide from delivered evidence
+        # only" model: peer_state_stores[i], task_claim_stores[i], and
+        # autonomy_kernels[i] are UAV i's entire view of the world. They are
+        # built here but only ever fed through a transport, never from world truth.
         self.peer_state_stores = {
             owner_agent_id: PeerStateStore(
                 owner_agent_id,
@@ -1104,9 +1148,22 @@ class Simulation:
         return update
 
     def run(self) -> SimulationResult:
+        """Drive the simulation to a finished mission or the time limit.
+
+        Structure: a ``t = 0`` bootstrap (below), then a loop that repeatedly
+        advances ``current_time`` to the nearest scheduled event. ``next_motion``
+        and ``next_heartbeat`` are periodic; failure, comms-fault and jammer
+        edges are one-shot. Each instant is a *mission boundary* (agents move,
+        full pipeline runs) or a *communication-only boundary* (observational:
+        graph + freshness + trace frame, then ``continue``). See the module
+        docstring for the pipeline order. Runs once per instance.
+        """
+
         if self._has_run:
             raise RuntimeError("a Simulation instance can only run once")
         self._has_run = True
+        # --- t = 0 bootstrap: graph, any zero-time faults, first heartbeat
+        #     delivery, resolve arrivals already at their task, first trace frame.
         initial_snapshots = self.mission.start(0.0)
         failure_injected = False
         communication_fault_started = self.config.comm_fault_agent_id is None
@@ -1142,6 +1199,8 @@ class Simulation:
             not self.mission.finished
             and current_time < self.config.max_simulation_time - epsilon
         ):
+            # Advance to the earliest event strictly after now. Periodic events
+            # (motion, heartbeat) plus whichever one-shot edges are still ahead.
             event_times = [
                 next_motion,
                 next_heartbeat,
@@ -1193,6 +1252,7 @@ class Simulation:
                 motion_due or heartbeat_due or failure_due or maximum_time_due
             )
             if mission_boundary:
+                # Real motion of every executing UAV since the last physical update.
                 self._advance_agents(
                     timestamp - last_physical_update_time,
                     timestamp,
@@ -1200,13 +1260,15 @@ class Simulation:
                 last_physical_update_time = timestamp
                 communication_positions: Mapping[int, Position] | None = None
             else:
+                # Observational instant: predict positions for the graph only,
+                # without touching agent state.
                 communication_positions = self._project_positions(
                     timestamp - last_physical_update_time,
                     timestamp,
                 )
 
-            # a failure scheduled on a boundary wins over heartbeat emission and
-            # task completion at that same timestamp.
+            # (1) apply the fault schedule. A failure scheduled on a boundary
+            # wins over heartbeat emission and task completion at that timestamp.
             if failure_due:
                 failure_injected = self.mission.inject_failure(
                     self.config.failure_agent_id, timestamp
@@ -1225,6 +1287,8 @@ class Simulation:
                 self._end_communication_fault(timestamp)
                 communication_fault_ended = True
 
+            # (2) rebuild the link graph from the current positions, then
+            # (3) age every UAV's peer-state freshness against its own clock.
             self._update_communication_graph(timestamp, communication_positions)
             self._advance_peer_freshness(timestamp)
 
@@ -1237,23 +1301,34 @@ class Simulation:
                 self._capture_trace_frame(timestamp, communication_positions)
                 continue
 
-            # publication precedes protocol-backed recovery and new allocation.
+            # --- mission-boundary pipeline (order is asserted by tests) ---
+            # (4) publish + deliver heartbeats. Publication precedes
+            #     protocol-backed recovery and any new allocation.
             if heartbeat_due:
                 snapshots = self.mission.exchange_heartbeats(timestamp)
                 self._deliver_peer_state(snapshots, timestamp)
                 while next_heartbeat <= timestamp + epsilon:
                     next_heartbeat += self.config.heartbeat_interval
 
+            # (5) hand an operator amendment to one UAV, if this is its moment.
             self._maybe_amend_contract(timestamp)
+            # (6) exchange failure votes/declarations, then let the mission act
+            #     on the ones that reached quorum.
             declarations = self._exchange_failure_evidence(timestamp)
             self.mission.detect_and_recover(timestamp, declarations)
+            # (7) retry amendment routes a healed link just opened.
             self._propagate_contract(timestamp)
+            # (8) one task-control round: distributed claim fixpoint, or one
+            #     centralized allocation. This is where ownership actually moves.
             self._exchange_claim_evidence(timestamp)
+            # (9) mark arrivals complete. If any did, run the round again so
+            #     completion evidence is seeded before the finish check and a
+            #     freed UAV can pick new work at this same instant.
             completed_now = self._complete_arrivals(timestamp)
             if completed_now:
-                # Completion evidence is seeded before the finish check, and
-                # newly idle UAVs select another intent at the same timestamp.
                 self._exchange_claim_evidence(timestamp)
+            # (10) out-of-band evaluator reads every replica; then record,
+            #      check invariants, and (below) test for mission end.
             self._observe_ownership(timestamp)
             self._record_positions(timestamp)
             self.mission.assert_consistent()
@@ -1491,11 +1566,6 @@ def _parser() -> argparse.ArgumentParser:
         help="communication fault restoration time",
     )
     parser.add_argument(
-        "--visualize",
-        action="store_true",
-        help="show an optional final matplotlib view",
-    )
-    parser.add_argument(
         "--record-trace",
         type=str,
         default=None,
@@ -1583,16 +1653,6 @@ def main(argv: Sequence[str] | None = None) -> int:
             raise RuntimeError("trace capture was requested but no trace was produced")
         result.trace.write_json(arguments.record_trace)
         LOGGER.info("[TRACE] Wrote playback trace to %s", arguments.record_trace)
-    if arguments.visualize:
-        try:
-            from .visualization import show_result
-
-            show_result(result, config)
-        except ImportError:
-            LOGGER.error(
-                "[VIS] matplotlib is not installed; use the 'visualization' extra"
-            )
-            return 2
     return 0 if result.metrics.mission_completed else 1
 
 

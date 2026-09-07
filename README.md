@@ -379,8 +379,7 @@ eudis-swarm/
 │   ├── config.py               # validated physical + communication configuration
 │   ├── validation.py           # shared finite / monotonic time and identifier validation
 │   ├── dashboard.py            # optional Streamlit/Plotly trace-playback entry point (eudis-swarm-dashboard)
-│   ├── dashboard_app.py        # optional dashboard implementation
-│   └── visualization.py        # optional legacy matplotlib final-frame view
+│   └── dashboard_app.py        # optional dashboard implementation
 ├── tests/                      # peer state, failure detection, task claims/ownership,
 │   │                           #   communication graph, transport, integration, packaging
 │   └── ...
@@ -398,9 +397,8 @@ eudis-swarm/
 │   ├── sitl.md                            # software-in-the-loop plan, and what it must not cost
 │   ├── milestones.md                      # development history: what was built, in what order
 │   ├── prior_art.md                       # evidence-bounded research/industrial comparison
-│   ├── prototype_0_1.md … prototype_0_3a.md
-│   ├── visualization_layer.md
-│   └── code_quality_and_performance.md
+│   ├── visualization_layer.md             # the trace-playback dashboard: frames, panels, limits
+│   └── history/                           # dated records: per-prototype design notes, quality history
 ├── pyproject.toml              # packaging, tool config; zero runtime dependencies
 ├── CHANGELOG.md  CONTRIBUTING.md  SECURITY.md
 └── .github/workflows/ci.yml    # ruff + pyright + pytest/coverage + build on Python 3.11 & 3.13
@@ -444,9 +442,8 @@ py -3.11 -m venv .venv
 python -m pip install -e ".[dev]"
 ```
 
-Optional extras: `python -m pip install -e ".[dev,visualization,dashboard]"`
-(`visualization` = matplotlib final-frame view; `dashboard` = Streamlit/Plotly
-trace playback).
+Optional extra: `python -m pip install -e ".[dev,dashboard]"`
+(`dashboard` = the Streamlit/Plotly trace-playback viewer).
 
 ### Run the baseline simulation
 

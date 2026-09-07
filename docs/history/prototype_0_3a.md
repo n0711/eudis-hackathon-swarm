@@ -5,7 +5,7 @@
 > utility, task claims, and `owns_task()` execution authority. The
 > `TaskAllocator` classes remain baselines; `--allocation-policy` maps their
 > distance/connectivity choices into the operational local-utility path described
-> below. See [the distributed-state foundation](distributed_state_foundation.md).
+> below. See [the distributed-state foundation](../distributed_state_foundation.md).
 
 ## Objective
 

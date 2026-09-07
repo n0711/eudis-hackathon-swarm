@@ -1,7 +1,46 @@
 """Model receiver-local task claims without consulting authoritative mission state.
 
-Immutable evidence, local lease clocks, and deterministic reconciliation let
-replicas diverge during partitions and converge after delivery resumes.
+This is task ownership without a coordinator. Every UAV runs its own
+:class:`TaskClaimStore`; the stores never share memory. A store decides what
+this one UAV may do from the immutable claim evidence the network has actually
+delivered to it, plus its own lease clock. ``owns_task()`` is the single
+authorization gate -- only a locally owned claim lets a UAV move to, renew, or
+complete a task.
+
+**Evidence types** (all immutable, all forwardable):
+
+* :class:`TaskClaim` -- "UAV *o* claims task *t*, generation *epoch*", stamped
+  with the owner's source clock. Its ``claim_id`` is ``(task, owner, epoch)``.
+* :class:`TaskClaimRelease` -- an owner giving up one exact claim, optionally
+  naming the winner it yielded to.
+* :class:`TaskCompletionEvidence` -- terminal proof tied to one exact claim.
+
+**Lifecycle of one task at one store**::
+
+    UNCLAIMED --create_claim--> OWNED_BY_SELF --renew_claim--> OWNED_BY_SELF
+        ^                           |                              |
+        |                     release_claim                  create_completion
+        |                           v                              v
+        +------------------------ UNCLAIMED                     COMPLETE (absorbing)
+
+A peer's delivered claim instead yields ``CLAIMED_BY_PEER_FRESH`` /
+``CLAIMED_BY_PEER_STALE``; two live owners visible at once yield ``CONTESTED``.
+
+**Freshness ladder** (by receiver-local age ``now - received_at``)::
+
+    age <= freshness_timeout           -> FRESH   (owner need not renew yet)
+    freshness_timeout < age <= lease   -> STALE   (still owned; do NOT re-claim)
+    age > lease_timeout                -> EXPIRED (claim is dead; task is free)
+
+``freshness_timeout`` defaults to half ``lease_duration``.
+
+**Divergence and convergence.** During a partition each side ages the other's
+claims independently, so both halves can legitimately reach ``OWNED_BY_SELF`` on
+the same task -- a genuine split brain. After delivery resumes both live claims
+become visible (``CONTESTED``); :meth:`TaskClaimStore.reconcile` runs the same
+deterministic rule at every replica -- lowest owner ID wins
+(:func:`select_winning_claim`) -- and the local loser emits an exact-generation
+release. No agreement protocol is involved.
 """
 
 from __future__ import annotations
@@ -181,31 +220,53 @@ class TaskClaimObservation:
     """One stored claim rendered at a receiver-local logical time."""
 
     claim: TaskClaim
+    #: Local time this claim was recorded.
     received_at: float
+    #: ``timestamp - received_at`` at render time.
     age: float
+    #: FRESH / STALE / EXPIRED for that age.
     freshness: ClaimFreshness
+    #: Whether this is the current generation for its owner (not superseded).
     current_for_owner: bool
+    #: Whether a release for this exact claim has been seen.
     released: bool
+    #: Whether a local reconcile() discarded this exact generation as a loser.
     reconciled_loser: bool
 
 
 @dataclass(frozen=True, slots=True)
 class TaskOwnershipView:
-    """A trace-ready receiver-local interpretation of one task."""
+    """A trace-ready receiver-local interpretation of one task.
+
+    This is what :meth:`TaskClaimStore.view` returns and what the EFSM,
+    evaluator, and dashboard read. Every field is derived from delivered
+    evidence and this store's clock -- none of it is authoritative.
+    """
 
     task_id: int
+    #: One of the six :class:`~eudis_swarm.task.TaskOwnershipState` values.
     state: TaskOwnershipState
+    #: Owner of the selected claim, or ``None`` when UNCLAIMED.
     known_owner_agent_id: int | None
+    #: Structural ID of the selected claim.
     claim_id: ClaimId | None
+    #: Its generation number.
     epoch: int | None
+    #: Receiver-local age of the selected claim.
     claim_age: float | None
+    #: FRESH / STALE / EXPIRED for that age.
     claim_freshness: ClaimFreshness | None
+    #: More than one live owner is visible here.
     contested: bool
+    #: If a local reconcile() already ran, the winner it chose.
     reconciliation_winner_agent_id: int | None
     reconciliation_winner_claim_id: ClaimId | None
+    #: Whether any claim for this task has been released, and which.
     released: bool
     released_claim_ids: tuple[ClaimId, ...]
+    #: Terminal evidence, present iff state is COMPLETE.
     completion: TaskCompletionEvidence | None
+    #: Every stored claim for this task, in stable order, for inspection.
     known_claim_observations: tuple[TaskClaimObservation, ...]
 
     @property
@@ -235,12 +296,24 @@ class TaskReconciliationDecision:
 
 @dataclass(frozen=True, slots=True)
 class _StoredClaim:
+    """One claim as this store holds it: the immutable claim plus the local
+    time it was recorded, which is what every age/freshness check uses."""
+
     claim: TaskClaim
     received_at: float
 
 
 @dataclass(frozen=True, slots=True)
 class _OwnershipContext:
+    """The result of interpreting one task at one instant, before it is turned
+    into a :class:`TaskOwnershipView`.
+
+    ``valid_claims`` are the lease-valid, non-released, non-reconciled-away
+    candidates; ``selected_claim`` is the single owner when there is exactly
+    one; ``contested`` is set when there is more than one; ``resolved_claim`` is
+    the winner a prior local ``reconcile()`` already picked, if still valid.
+    """
+
     valid_claims: tuple[TaskClaim, ...]
     selected_claim: TaskClaim | None
     contested: bool
@@ -299,32 +372,49 @@ class TaskClaimStore:
             raise ValueError("freshness_timeout must be less than lease_duration")
         self._freshness_timeout = chosen_freshness
 
+        # --- known evidence, keyed by task_id then by claim/agent ---
+        # Every claim ever delivered or created, kept for audit even once
+        # obsolete. Nothing is discarded; currency is decided by the indexes below.
         self._claims: dict[int, dict[ClaimId, _StoredClaim]] = {
             task_id: {} for task_id in self._task_ids
         }
+        # Highest epoch seen per (task, owner). A lower epoch can never become
+        # current again.
         self._highwater: dict[int, dict[int, int]] = {
             task_id: {agent_id: 0 for agent_id in self._agent_ids}
             for task_id in self._task_ids
         }
+        # The one claim_id that is "current" for each (task, owner).
         self._current_claim_ids: dict[int, dict[int, ClaimId]] = {
             task_id: {} for task_id in self._task_ids
         }
+        # Claim IDs known to be released (voluntarily or as a reconciliation loser).
         self._released_claim_ids: dict[int, set[ClaimId]] = {
             task_id: set() for task_id in self._task_ids
         }
+        # The release / completion evidence itself, so it can be re-served and
+        # so a conflicting duplicate is rejected.
         self._known_releases: dict[int, dict[ClaimId, TaskClaimRelease]] = {
             task_id: {} for task_id in self._task_ids
         }
         self._known_completions: dict[int, dict[ClaimId, TaskCompletionEvidence]] = {
             task_id: {} for task_id in self._task_ids
         }
+        # Winner this store's own reconcile() selected, per task, and the exact
+        # claim generations that decision consumed (suppressed from later contests).
         self._resolved_winner_ids: dict[int, ClaimId] = {}
         self._reconciled_claim_ids: dict[int, set[ClaimId]] = {
             task_id: set() for task_id in self._task_ids
         }
+
+        # --- locally originated evidence, for persistent network rebroadcast ---
+        # This UAV's own current claim / releases / completions. The transport
+        # re-offers these every round until they are delivered or superseded.
         self._outgoing_claims: dict[int, TaskClaim] = {}
         self._outgoing_releases: dict[ClaimId, TaskClaimRelease] = {}
         self._outgoing_completions: dict[int, TaskCompletionEvidence] = {}
+
+        # Last observed local time, enforcing monotonic clock use.
         self._last_timestamp: float | None = None
 
     @property

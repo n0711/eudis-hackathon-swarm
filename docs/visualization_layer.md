@@ -50,7 +50,7 @@ observer projection; neither field is task authority.
 From the repository root:
 
 ```powershell
-python -m pip install -e ".[dev,visualization,dashboard]"
+python -m pip install -e ".[dev,dashboard]"
 eudis-swarm --record-trace trace.json
 eudis-swarm-dashboard trace.json
 ```
@@ -90,9 +90,6 @@ predicted peer degree 1, and predicted isolation `NO`.
 - Playback supports play, pause, speed, frame steps, event jumps, and a slider.
 - The timeline and filterable log combine structured trace events with ordered
   EFSM transition records under a distinct `AUTONOMY` category.
-
-The legacy `--visualize` matplotlib final-frame view remains available as a
-static debugging aid; it is not the preferred mission playback interface.
 
 ## Current limitations
 

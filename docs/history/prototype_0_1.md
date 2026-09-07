@@ -4,7 +4,7 @@
 > failure/recovery baseline and its acceptance results. The normal mission now
 > uses receiver-local utility, replicated task claims, and `owns_task()` as
 > execution authority. The 0.1 allocator remains a comparison baseline; see
-> [the distributed-state foundation](distributed_state_foundation.md).
+> [the distributed-state foundation](../distributed_state_foundation.md).
 
 ## Scope and acceptance criterion
 

@@ -4,7 +4,7 @@
 > milestone and its original results. Current agent decisions still never receive
 > graph truth, but immutable task/failure evidence can now cross connected
 > multi-hop components and task execution is authorized by receiver-local claims.
-> See [the distributed-state foundation](distributed_state_foundation.md).
+> See [the distributed-state foundation](../distributed_state_foundation.md).
 
 ## Scope and acceptance criterion
 

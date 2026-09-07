@@ -20,7 +20,7 @@ On Windows, in the repository root:
 
 ```powershell
 python -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -e ".[dev,visualization,dashboard]"
+.\.venv\Scripts\python.exe -m pip install -e ".[dev,dashboard]"
 ```
 
 On Linux or macOS, substitute `.venv/bin/python`. Either way, **call the
@@ -51,18 +51,18 @@ On Windows, `.\scripts\pitch-demo.ps1` runs both back to back.
 
 ## Read the code in this order
 
-Twenty-seven modules is a lot. These six, in order, are enough to understand
+Twenty-six modules is a lot. These six, in order, are enough to understand
 everything else. Every module has a docstring saying what it is for; those are
 accurate and worth trusting.
 
 | Order | Module | Lines | Why this one |
 | ---: | --- | ---: | --- |
-| 1 | [`config.py`](../src/eudis_swarm/config.py) | 164 | Every knob in the simulation, in one place. Read it as a table of contents. |
-| 2 | [`agent.py`](../src/eudis_swarm/agent.py) | 178 | Authoritative world truth: where an aircraft *actually* is. Small, and the boundary everything else is defined against. |
-| 3 | [`peer_state.py`](../src/eudis_swarm/peer_state.py) | 302 | What one UAV has actually received about its peers. This is the idea of the project made concrete. |
-| 4 | [`task_claims.py`](../src/eudis_swarm/task_claims.py) | 963 | Ownership without a coordinator: leases, epochs, contested reconciliation. |
-| 5 | [`autonomy.py`](../src/eudis_swarm/autonomy.py) | 1807 | The pure decision kernel. Big, but it is five small state machines side by side, not one large one. |
-| 6 | [`simulation.py`](../src/eudis_swarm/simulation.py) | 1600 | The loop that drives all of the above. Read last: it makes sense only once the pieces do. |
+| 1 | [`config.py`](../src/eudis_swarm/config.py) | ~240 | Every knob in the simulation, in one place. The docstring groups them; read it as a table of contents. |
+| 2 | [`agent.py`](../src/eudis_swarm/agent.py) | ~210 | Authoritative world truth: where an aircraft *actually* is. Small, and the boundary everything else is defined against. |
+| 3 | [`peer_state.py`](../src/eudis_swarm/peer_state.py) | ~330 | What one UAV has actually received about its peers. This is the idea of the project made concrete. |
+| 4 | [`task_claims.py`](../src/eudis_swarm/task_claims.py) | ~1050 | Ownership without a coordinator: leases, epochs, contested reconciliation. The docstring has the lifecycle diagram. |
+| 5 | [`autonomy.py`](../src/eudis_swarm/autonomy.py) | ~1900 | The pure decision kernel. Big, but it is five small state machines side by side, each with the same five-part shape (see the docstring). |
+| 6 | [`simulation.py`](../src/eudis_swarm/simulation.py) | ~1650 | The loop that drives all of the above. Read last: it makes sense only once the pieces do. The docstring lists the per-tick pipeline. |
 
 Everything else is support: `messaging.py` delivers evidence, `metrics.py` and
 `evaluation.py` measure, `trace.py` and `dashboard_app.py` replay,

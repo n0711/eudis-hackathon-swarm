@@ -5,7 +5,7 @@
 > heartbeats but later adds deterministic multi-hop flooding for immutable task
 > and failure-protocol evidence plus receiver-local claim-authorized task control.
 > See
-> [the distributed-state foundation](distributed_state_foundation.md).
+> [the distributed-state foundation](../distributed_state_foundation.md).
 
 ## Objective
 

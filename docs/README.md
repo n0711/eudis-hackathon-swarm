@@ -17,10 +17,19 @@ document that assumes you know nothing.
 | See how the project got here | [`milestones.md`](milestones.md) |
 | Compare against published research and industry | [`prior_art.md`](prior_art.md) |
 | Understand the replay interface | [`visualization_layer.md`](visualization_layer.md) |
-| See performance and quality history | [`code_quality_and_performance.md`](code_quality_and_performance.md) |
 
-The `prototype_0_*.md` files are dated design records for earlier prototypes.
-They describe the system as it was at that point, not as it is now.
+## History
+
+Everything under [`history/`](history/) is a dated record kept for provenance,
+not a description of the current system:
+
+| Document | Covers |
+| --- | --- |
+| [`history/prototype_0_1.md`](history/prototype_0_1.md) … [`history/prototype_0_3a.md`](history/prototype_0_3a.md) | design notes for each earlier prototype, as it stood at that milestone |
+| [`history/code_quality_and_performance.md`](history/code_quality_and_performance.md) | performance and quality measurements over time |
+
+For the current development narrative read [`milestones.md`](milestones.md)
+instead.
 
 ## The rules
 
