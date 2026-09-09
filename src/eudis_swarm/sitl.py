@@ -177,8 +177,8 @@ class SitlVehicle:
     ) -> None:
         """Send a position setpoint, in local east/north metres."""
 
-        mavutil = _require_mavutil()
         connection = self._require_connection()
+        mavutil = _require_mavutil()
         if self._frame is None:
             raise RuntimeError("the local frame is not fixed yet; call connect() first")
         latitude, longitude = self._frame.to_global(target)
@@ -214,8 +214,8 @@ class SitlVehicle:
 
         if altitude_m <= 0.0:
             raise ValueError("altitude_m must be positive")
-        mavutil = _require_mavutil()
         connection = self._require_connection()
+        mavutil = _require_mavutil()
 
         connection.set_mode("GUIDED")
         deadline = time.monotonic() + settle_timeout
