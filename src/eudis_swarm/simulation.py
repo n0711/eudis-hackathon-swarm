@@ -49,6 +49,7 @@ import argparse
 import logging
 import math
 import random
+import sys
 from dataclasses import dataclass, replace
 from typing import Mapping, Sequence
 
@@ -1463,7 +1464,12 @@ SCENARIO_PRESETS: dict[str, dict[str, object]] = {
 
 
 def configure_logging(level: str = "INFO") -> None:
-    logging.basicConfig(level=level, format="%(message)s", force=True)
+    # Results go to stdout so `eudis-swarm > run.txt` and shell pipelines capture
+    # them. logging.basicConfig defaults to stderr, which left stdout empty and
+    # made every run unredirectable. Usage errors still go to stderr via argparse.
+    logging.basicConfig(
+        level=level, format="%(message)s", force=True, stream=sys.stdout
+    )
 
 
 def _parser() -> argparse.ArgumentParser:

@@ -351,6 +351,16 @@ and interfaces change between prototypes.
 
 ### Fixed
 
+- Simulation results are written to stdout rather than stderr. `configure_logging`
+  called `logging.basicConfig` without a stream, so every result line went to the
+  default stderr handler and `eudis-swarm --scenario demo-quorum-floor > run.txt`
+  produced a 2,337-byte stderr stream and an empty file. A repository whose claim
+  is that results are reproducible from a fixed command line could not redirect,
+  pipe, or capture a single one of them. It also broke `scripts/pitch-demo.ps1` in
+  Windows PowerShell 5.1, which converts native-command stderr into error records:
+  with `$ErrorActionPreference = 'Stop'`, the first `[MISSION]` line terminated the
+  script before either scenario reported. The script needed no change. Usage errors
+  still go to stderr, where argparse puts them.
 - Protocol telemetry no longer counts repeated evaluations toward inactive
   endpoints as link attempts. In the audited pre-fix default run, the entire
   `15,075 - 474 = 14,601` attempt/success gap targeted failed, inactive UAV 2
