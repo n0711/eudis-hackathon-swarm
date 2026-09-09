@@ -12,6 +12,8 @@ from dataclasses import replace
 
 import pytest
 
+pytest.importorskip("plotly")
+
 from eudis_swarm.config import SimulationConfig
 from eudis_swarm.dashboard_app import (
     CONTACT_COLOURS,
