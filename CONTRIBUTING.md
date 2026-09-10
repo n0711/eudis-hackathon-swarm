@@ -230,6 +230,5 @@ Conventional-style prefixes (`feat:`, `fix:`, `refactor:`, `docs:`, `test:`,
 
 ## Scope
 
-This is a research prototype for a specific challenge. Contributions that add
-real autopilot, flight-control, targeting, or vehicle-integration code are out
-of scope and will be declined.
+SITL integration is allowed only through the documented vehicle-backend boundary.
+changes to distributed autonomy, ownership, failure detection, or communication semantics require discussion first
