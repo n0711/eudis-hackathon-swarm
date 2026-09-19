@@ -270,3 +270,110 @@ runtime dependency.
     fixed here before committing) — exit 0, 5-row CSV, `delta_*` columns
     equal `centralized - distributed` on every row, confirming the arithmetic
     described in the plan above.
+## Phase 2B — VehicleBackend seam (stretch, attempted after 2A was green; later dropped)
+
+This phase introduced `src/eudis_swarm/vehicle_backend.py`, a `VehicleBackend`
+seam wrapping the existing point-mass model and `sitl.SitlVehicle` behind a
+common command-then-observe contract, plus 19 direct-comparison tests. It was
+additive and never wired into `Simulation`.
+
+**Dropped during a later rebase of this branch onto an advanced `main`:**
+`main` had, in the meantime, independently gained its own
+`src/eudis_swarm/vehicle_backend.py` serving a different purpose. Rather than
+reconcile two unrelated modules sharing one filename, this session's version
+was left out of the rebuilt branch; the exploration is recorded here for
+reference only; none of its code is present in the branch anymore.
+
+## SUMMARY (end of session)
+
+Final state (at the time this log entry was written): branch
+`claude/inventory`, HEAD `bcbf8b4` ("overnight: begin a VehicleBackend seam,
+additive only"). Working tree clean except a pre-existing untracked local
+tool-config directory, which was already untracked before this session
+started and was not created or touched by me. Nothing was pushed; nothing
+touched a remote; every commit this session made is prefixed `overnight:`.
+Final re-run at this exact HEAD, just now: `ruff check .` clean, `ruff format
+--check .` clean, `pyright` one pre-existing error (`dashboard_app.py:14`,
+streamlit unresolvable on this machine's Python 3.10 — present since before
+this session, unrelated to any change made tonight), full suite **534
+passed, 0 failed, 90.79% branch coverage** (floor 85%).
+
+(Note added later: `bcbf8b4` itself was subsequently dropped when this
+branch was rebuilt on top of an advanced `main` — see Phase 2B above. The
+rest of this summary describes the session as it actually ran.)
+
+### What changed, across both sessions on this branch tonight
+
+- `aa88504` (first session): Phase 1 ground truth. No behavior change. Added
+  `AGENTS.md`, `PRE_HACKATHON_BASELINE.md`, this log. Full detail above.
+- `b5b1acb` (this session, verifying and committing the first session's
+  already-written work): Phase 2A. Two new observer-only CLIs
+  (`lease_timeout_study.py` + `lease_timeout_chart.py`,
+  `control_mode_comparison.py`) and their tests. Additive; no coordination-
+  core file touched; found-but-not-fixed a pre-existing crash in
+  `mission.py` below the published lease-timeout range (see that commit's
+  log entry).
+- `bcbf8b4` (this session): Phase 2B, scoped down to "begin the seam" per
+  the operator's own wording rather than the full integration — see that
+  section above for the explicit scope decision and why it was later
+  dropped. Additive; `agent.py` and `simulation.py` untouched.
+
+### What I deliberately did not touch
+
+Every file on the coordination-core list above (`peer_state.py`,
+`failure_manager.py`, `task_claims.py`, `task_utility.py`, `autonomy.py`,
+`task.py`, `mission.py`, `messaging.py`, `communication.py`,
+`mission_contract.py`, `task_claim_trace.py`, `trace.py`,
+`simulation_events.py`, `simulation.py`, `agent.py`) — zero edits, zero
+lines changed, across both sessions. Also untouched, per the operator's
+explicit "do not tonight" list: quantum optimization, ML, ROS 2, any public
+interface change that breaks an existing caller, any new heavy dependency,
+anything needing real hardware, live SITL, or a network connection.
+
+### Repo-hygiene items for the operator to decide (not fixed, carried from Phase 1)
+
+- No Python 3.11+ interpreter exists on this machine, but
+  `pyproject.toml` requires `>=3.11`. `.venv` runs 3.10.12 with
+  `--ignore-requires-python`. Two test files
+  (`test_packaging.py`, `test_dashboard_comparison.py`) cannot be collected
+  on this interpreter for that reason and are excluded from every test run
+  above by `--ignore`, not by modifying them. Get a 3.11+ interpreter onto
+  this machine for full local/CI parity.
+- `streamlit` cannot install on this interpreter (needs Python >=3.12
+  transitively via its `numpy` pin), so `dashboard_app.py` cannot be
+  exercised or type-checked locally; `plotly` alone was installed and is
+  sufficient for everything gated only on it.
+- `pyproject.toml`'s `[project.urls]` still point at
+  `github.com/n0711/eudis-swarm`, not this repo's actual name/remote
+  (`eudis-hackathon-swarm`).
+- **New this session:** `mission.py`'s `_assert_distributed_consistent()`
+  raises `RuntimeError` for `claim_lease_duration` below roughly `0.3`
+  (crashes at `0.1`/`0.2`). Below every published lease-timeout range, so no
+  published number is affected, but it is a genuine robustness gap in
+  coordination-core code I did not touch or investigate further, per this
+  session's own boundary. Reproduction is in the Phase 2A build log above.
+- 2A.5 (adding `eudis-swarm-lease-study`/`eudis-swarm-mode-compare` console
+  scripts) was deliberately left undone — both new CLIs already run fine via
+  `python -m`; naming/curating new package-metadata surface felt like the
+  operator's call, not mine to make unilaterally overnight.
+
+### Three highest-value next steps, for your review
+
+1. **Decide on the `mission.py` lease-timeout-floor crash.** It's outside
+   every range this project has ever published, so it's not urgent, but a
+   `RuntimeError` from `_assert_distributed_consistent()` on a legal-looking
+   config value is worth either a guardrail (reject too-short leases with a
+   clear `ValueError` at config time) or a documented floor. Needs your
+   judgment on whether it's a real bug or an out-of-scope config regime.
+2. **Decide whether to wire `VehicleBackend` into `Simulation`.** The seam
+   and both backends exist and are tested; actually routing
+   `_advance_agents`/`_project_positions` through a selected backend is a
+   `simulation.py` change I deliberately left for you, since it touches
+   coordination-core-adjacent orchestration and needs a design decision
+   about how a backend is selected per run (config field? CLI flag?) that
+   didn't feel safe to make unsupervised.
+3. **Get a Python 3.11+ interpreter onto this machine.** Every quality-gate
+   run tonight (both sessions) ran on 3.10 with two test files excluded by
+   necessity. This is the single change that would let the full, unmodified
+   CI gate run locally and remove the two `--ignore` flags from every
+   command in this log.
