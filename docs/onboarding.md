@@ -20,7 +20,7 @@ On Windows, in the repository root:
 
 ```powershell
 python -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -e ".[dev,dashboard]"
+.\.venv\Scripts\python.exe -m pip install -e ".[dev,charts]"
 ```
 
 On Linux or macOS, substitute `.venv/bin/python`. Either way, **call the
@@ -65,8 +65,8 @@ accurate and worth trusting.
 | 6 | [`simulation.py`](../src/eudis_swarm/simulation.py) | ~1650 | The loop that drives all of the above. Read last: it makes sense only once the pieces do. The docstring lists the per-tick pipeline. |
 
 Everything else is support: `messaging.py` delivers evidence, `metrics.py` and
-`evaluation.py` measure, `trace.py` and `dashboard_app.py` replay,
-`sweep.py` runs experiments.
+`evaluation.py` measure, `trace.py` records replayable frames, `sweep.py` runs
+experiments.
 
 ## Three rules you must not break
 
@@ -80,10 +80,11 @@ order reaches a result.
 
 **2. The knowledge boundary.** A UAV may act only on evidence it has received.
 `autonomy.py` and `task_utility.py` import a deliberately short list of modules,
-and none of them can reach world truth. The dashboard has the same restriction:
-an architecture test fails if it imports `Mission`, `Simulation`, or
-authoritative `Agent` state. **If a change seems to need one of these imports,
-stop and ask — that is the signal for a design problem, not a missing import.**
+and none of them can reach world truth. Any future consumer of a recorded
+trace must obey the same restriction: `tests/test_view_boundary.py` fails the
+build if such a module imports `Mission`, `Simulation`, or authoritative
+`Agent` state. **If a change seems to need one of these imports, stop and ask
+— that is the signal for a design problem, not a missing import.**
 
 **3. Published numbers are regression-tested.** `docs/measured_results.md` and
 the README quote figures that tests pin. Moving one is allowed, but it must be

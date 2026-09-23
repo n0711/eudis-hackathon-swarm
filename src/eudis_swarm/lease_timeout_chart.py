@@ -3,7 +3,7 @@
 Reads a ``lease_timeout_study`` aggregate CSV and renders one self-contained,
 fully offline HTML chart -- Plotly's JavaScript is embedded inline
 (``include_plotlyjs=True``), so the file needs no network access to open or
-view. Guarded on Plotly exactly the way ``dashboard.py`` guards Streamlit: a
+view. Guarded on Plotly the same way the ``sitl`` extra guards ``pymavlink``: a
 missing optional dependency disables this module, it is not a hard
 requirement of the package.
 """
@@ -31,7 +31,7 @@ def read_aggregate_csv(path: Path) -> list[dict[str, str]]:
 
 def build_figure(rows: Sequence[dict[str, str]]) -> "go.Figure":
     if importlib.util.find_spec("plotly") is None:
-        raise ImportError("plotly is unavailable; install the 'dashboard' extra")
+        raise ImportError("plotly is unavailable; install the 'charts' extra")
     if not rows:
         raise ValueError("no rows to chart")
     missing = _REQUIRED_COLUMNS - set(rows[0])
@@ -100,7 +100,7 @@ def _parser() -> argparse.ArgumentParser:
 def main(argv: Sequence[str] | None = None) -> int:
     arguments = _parser().parse_args(argv)
     if importlib.util.find_spec("plotly") is None:
-        _parser().error("plotly is unavailable; install the 'dashboard' extra")
+        _parser().error("plotly is unavailable; install the 'charts' extra")
     rows = read_aggregate_csv(arguments.input)
     if not rows:
         _parser().error(f"{arguments.input} has no data rows")

@@ -38,7 +38,7 @@ build.
 
 - **The knowledge boundary.** `agent.py` is authoritative world truth. Nothing
   in this lane may be imported by `autonomy.py` or `task_utility.py`, and
-  nothing in the dashboard package may import `Agent`, `Mission` or
+  nothing that renders a recorded trace may import `Agent`, `Mission` or
   `Simulation`. If a UAV is to *believe* something about its own remaining
   energy, that belief travels as a per-agent trace field, exactly as peer
   evidence does.

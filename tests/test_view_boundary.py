@@ -1,10 +1,18 @@
-"""The dashboard may only show what an agent actually received.
+"""Any view may only show what an agent actually received.
 
-The belief panels exist to demonstrate that each UAV acts on partial, delayed,
-sometimes wrong information. That demonstration is worthless if the renderer
-quietly reaches for world truth to fill a gap, so this is enforced structurally
-rather than left as an intention: the dashboard is allowed to import the trace
-and nothing else from the package.
+The belief panels the Streamlit dashboard used to render existed to demonstrate
+that each UAV acts on partial, delayed, sometimes wrong information. That
+demonstration is worthless if a renderer quietly reaches for world truth to
+fill a gap, so this was enforced structurally rather than left as an
+intention: the old dashboard modules were statically checked to import the
+trace and nothing else from the package.
+
+The dashboard is gone (see CHANGELOG), and nothing in the tree currently
+consumes the trace to render a view, so there is no module left to point the
+guard at. The checker itself stays here, proven against literal violations
+below, so the next consumer of ``trace.py`` -- a Gazebo-side visualization
+panel or anything else -- can be dropped into ``VIEW_MODULES`` and the guard
+is live again with no new machinery to write.
 """
 
 from __future__ import annotations
@@ -12,13 +20,13 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
-import pytest
-
 SOURCE_ROOT = Path(__file__).resolve().parent.parent / "src" / "eudis_swarm"
 
-DASHBOARD_MODULES = ("dashboard.py", "dashboard_app.py")
+#: Populate with any module that renders or reconstructs belief from a
+#: recorded trace, e.g. ("gazebo_view.py",), once one exists.
+VIEW_MODULES: tuple[str, ...] = ()
 
-#: Names that carry authoritative world state. A dashboard that imports any of
+#: Names that carry authoritative world state. A view that imports any of
 #: these can read ground truth instead of per-agent evidence.
 FORBIDDEN_MODULES = frozenset(
     {
@@ -68,28 +76,26 @@ def _imported_names(source: str) -> set[str]:
     return names
 
 
-@pytest.mark.parametrize("module_name", DASHBOARD_MODULES)
-def test_the_dashboard_cannot_import_world_truth(module_name: str) -> None:
-    source = (SOURCE_ROOT / module_name).read_text(encoding="utf-8")
+def test_no_view_module_imports_world_truth() -> None:
+    for module_name in VIEW_MODULES:
+        source = (SOURCE_ROOT / module_name).read_text(encoding="utf-8")
+        offending = _imported_modules(source) & FORBIDDEN_MODULES
+        assert not offending, (
+            f"{module_name} imports {sorted(offending)}, which carries "
+            "authoritative world state. A view must reconstruct belief from "
+            "the trace only."
+        )
 
-    offending = _imported_modules(source) & FORBIDDEN_MODULES
 
-    assert not offending, (
-        f"{module_name} imports {sorted(offending)}, which carries authoritative "
-        "world state. The dashboard must reconstruct belief from the trace only."
-    )
-
-
-@pytest.mark.parametrize("module_name", DASHBOARD_MODULES)
-def test_the_dashboard_cannot_name_authoritative_types(module_name: str) -> None:
-    source = (SOURCE_ROOT / module_name).read_text(encoding="utf-8")
-
-    offending = _imported_names(source) & FORBIDDEN_NAMES
-
-    assert not offending, (
-        f"{module_name} imports {sorted(offending)}. Rendering must use the "
-        "recorded per-agent trace fields, never a live authoritative object."
-    )
+def test_no_view_module_names_authoritative_types() -> None:
+    for module_name in VIEW_MODULES:
+        source = (SOURCE_ROOT / module_name).read_text(encoding="utf-8")
+        offending = _imported_names(source) & FORBIDDEN_NAMES
+        assert not offending, (
+            f"{module_name} imports {sorted(offending)}. Rendering must use "
+            "the recorded per-agent trace fields, never a live authoritative "
+            "object."
+        )
 
 
 def test_the_guard_would_catch_a_real_violation() -> None:

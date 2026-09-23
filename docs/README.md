@@ -16,7 +16,6 @@ document that assumes you know nothing.
 | Fly a real autopilot against the simulator | [`sitl.md`](sitl.md) |
 | See how the project got here | [`milestones.md`](milestones.md) |
 | Compare against published research and industry | [`prior_art.md`](prior_art.md) |
-| Understand the replay interface | [`visualization_layer.md`](visualization_layer.md) |
 
 ## History
 
