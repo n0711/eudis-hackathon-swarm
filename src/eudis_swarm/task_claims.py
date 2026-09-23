@@ -239,7 +239,7 @@ class TaskOwnershipView:
     """A trace-ready receiver-local interpretation of one task.
 
     This is what :meth:`TaskClaimStore.view` returns and what the EFSM,
-    evaluator, and dashboard read. Every field is derived from delivered
+    evaluator, and trace recorder read. Every field is derived from delivered
     evidence and this store's clock -- none of it is authoritative.
     """
 

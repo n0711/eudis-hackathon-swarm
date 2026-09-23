@@ -154,8 +154,8 @@ the one-evaluation flag is then cleared. Stable all-active contact with no
 contest permits cooperation to resume, while renewed severe evidence can move
 reconciliation back to local autonomy.
 
-The mode belongs to one UAV and is currently advisory. It is exposed to traces
-and the dashboard, but it does not yet gate task selection or execution,
+The mode belongs to one UAV and is currently advisory. It is exposed to
+traces, but it does not yet gate task selection or execution,
 change flight behavior, or command relay motion. The pure machine emits
 requests such as `REDUCE_REMOTE_DEPENDENCE`, `ENTER_LOCAL_AUTONOMY`,
 `REQUEST_RECONCILIATION`, and `RESUME_COOPERATION`; no effect dispatcher yet

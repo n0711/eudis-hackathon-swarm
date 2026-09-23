@@ -4,8 +4,7 @@
 
 EUDIS Swarm is a **deterministic, offline simulation**. It has no network
 listeners, no authentication, no persistence layer, no user accounts, and no
-runtime dependencies outside the Python standard library. The optional
-dashboard binds to localhost only.
+runtime dependencies outside the Python standard library.
 
 There is therefore no production attack surface. The realistic security
 concerns for this repository are supply-chain integrity of the development

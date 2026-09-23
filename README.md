@@ -196,7 +196,7 @@ Three kinds of state are kept strictly separate:
 | --- | --- | --- |
 | **World / physics** | real `Agent` positions and responsiveness, the live `CommunicationGraph`, and mutable `Task` records maintained as observer-facing mission projections | authorize ownership from `Task.assigned_agent`, or hand a remote UAV's live state to local decision logic |
 | **Receiver-local control** | own pose and responsiveness, the immutable `TaskObjective` catalogue, `ReceiverLocalTaskUtility`, one `PeerStateStore`, one `TaskClaimStore`, and a local execution-intent cache | infer failure from silence alone, copy graph or projected task-owner truth, or act without `owns_task()` |
-| **Observer / evaluation** | metrics, traces, the playback dashboard, test assertions comparing belief against truth | feed its privileged view back into allocation or failure decisions |
+| **Observer / evaluation** | metrics, traces, test assertions comparing belief against truth | feed its privileged view back into allocation or failure decisions |
 
 ## Measured behaviour
 
@@ -403,9 +403,7 @@ eudis-swarm/
 │   ├── task_claim_demo.py      # deterministic 2+2 split-brain / reconcile / continue demo + CLI
 │   ├── agent.py                # world-truth UAV state, 2D point-mass motion, immutable heartbeats
 │   ├── config.py               # validated physical + communication configuration
-│   ├── validation.py           # shared finite / monotonic time and identifier validation
-│   ├── dashboard.py            # optional Streamlit/Plotly trace-playback entry point (eudis-swarm-dashboard)
-│   └── dashboard_app.py        # optional dashboard implementation
+│   └── validation.py           # shared finite / monotonic time and identifier validation
 ├── tests/                      # peer state, failure detection, task claims/ownership,
 │   │                           #   communication graph, transport, integration, packaging
 │   └── ...
@@ -428,7 +426,6 @@ eudis-swarm/
 │   ├── sitl.md                            # software-in-the-loop plan, and what it must not cost
 │   ├── milestones.md                      # development history: what was built, in what order
 │   ├── prior_art.md                       # evidence-bounded research/industrial comparison
-│   ├── visualization_layer.md             # the trace-playback dashboard: frames, panels, limits
 │   └── history/                           # dated records: per-prototype design notes, quality history
 ├── pyproject.toml              # packaging, tool config; zero runtime dependencies
 ├── CHANGELOG.md  CONTRIBUTING.md  SECURITY.md
@@ -473,8 +470,8 @@ py -3.11 -m venv .venv
 python -m pip install -e ".[dev]"
 ```
 
-Optional extra: `python -m pip install -e ".[dev,dashboard]"`
-(`dashboard` = the Streamlit/Plotly trace-playback viewer).
+Optional extra: `python -m pip install -e ".[dev,charts]"`
+(`charts` = Plotly, for the offline lease-timeout chart).
 
 ### Run the baseline simulation
 
@@ -519,33 +516,6 @@ eudis-swarm --scenario baseline               # the same split under central con
 non-zero for that reason. A test asserts it, so a change that let it succeed
 would break the build rather than quietly erase the result.
 
-### Side-by-side belief comparison
-
-Record the same scenario under both control modes and replay them together.
-In the sidebar, switch **View** to **Belief comparison**.
-
-```bash
-eudis-swarm --scenario demo-quorum-floor --record-trace left.trace.json
-eudis-swarm --scenario baseline-quorum-floor --record-trace right.trace.json
-eudis-swarm-dashboard left.trace.json
-```
-
-The second command exits non-zero because its mission fails; the trace is still
-written. The two runs are aligned by logical time rather than frame number, so
-once the 10.75 s run has finished its panel holds its final frame while the
-other keeps going — a completed swarm beside one still trying.
-
-Each panel is titled from the control mode recorded in its own trace, so the
-two files may be given in either order without mislabelling a run.
-
-Each panel shows positions and links, every UAV's evidence about every peer,
-its ownership belief per task, its contracted posture and intent version, and
-the evaluator-computed wasted-work counters. Peers are labelled by evidence
-and its age — `HEARD 0.4s`, `SILENT 8.7s`, `DECLARED FAILED (quorum)` — never
-by conclusion. The belief panels are reconstructed only from recorded
-per-agent trace fields; an architecture test fails the build if the dashboard
-ever imports a module carrying authoritative world state.
-
 ### Parameter sweeps
 
 ```bash
@@ -556,12 +526,16 @@ eudis-swarm-sweep --param lease-timeout --from 0.5 --to 6.0 --steps 12 \
 One CSV row per (parameter value, seed). The same seeds reproduce
 byte-identical output.
 
-### Trace-driven playback dashboard (optional)
+### Trace recording (optional)
 
 ```bash
 eudis-swarm --record-trace trace.json
-eudis-swarm-dashboard trace.json
 ```
+
+Records a schema-versioned JSON trace of every mission/communication boundary
+— world state, receiver-local peer knowledge, and ownership views — for
+offline inspection or tooling. There is currently no bundled viewer; see
+`trace.py` for the schema.
 
 ## Roadmap
 

@@ -21,7 +21,7 @@ insertion order that is not itself deterministic.
 ```bash
 python3.11 -m venv .venv
 source .venv/bin/activate          # PowerShell: .\.venv\Scripts\Activate.ps1
-python -m pip install -e ".[dev,dashboard]"
+python -m pip install -e ".[dev,charts]"
 ```
 
 If tests fail to import `eudis_swarm`, your editable install is stale — most

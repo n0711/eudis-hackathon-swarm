@@ -21,7 +21,6 @@ document that assumes you know nothing.
 | See how the project got here | [`milestones.md`](milestones.md) |
 | Compare against published research and industry | [`prior_art.md`](prior_art.md) |
 | Understand the supplied IN424 exploration material | [`exploration_reference.md`](exploration_reference.md) |
-| Understand the replay interface | [`visualization_layer.md`](visualization_layer.md) |
 
 ## History
 

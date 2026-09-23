@@ -153,12 +153,12 @@ def test_a_preset_overrides_the_matching_command_line_option() -> None:
 
 
 # --------------------------------------------------------------------------
-# the running counter the dashboard displays
+# the running counter a view would display
 # --------------------------------------------------------------------------
 
 
 def test_the_trace_carries_the_running_wasted_work_counter() -> None:
-    """The dashboard shows this climbing; it must be in the frames to show."""
+    """A view would show this climbing; it must be in the frames to show."""
 
     trace = Simulation(_config("demo-partition"), capture_trace=True).run().trace
     assert trace is not None

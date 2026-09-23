@@ -49,14 +49,12 @@ dev = [
 # Software-in-the-loop only. Nothing in the core imports these, and a SITL run
 # never produces a measured result: see docs/sitl.md.
 sitl = ["pymavlink>=2.4.42"]
-dashboard = [
-    "plotly>=5.24,<8",
-    "streamlit>=1.40,<2",
-]
+# Offline chart rendering only (e.g. lease_timeout_chart.py). Nothing in the
+# core imports this.
+charts = ["plotly>=5.24,<8"]
 
 [project.scripts]
 eudis-swarm = "eudis_swarm.simulation:main"
-eudis-swarm-dashboard = "eudis_swarm.dashboard:main"
 eudis-swarm-sweep = "eudis_swarm.sweep:main"
 eudis-swarm-generalization = "eudis_swarm.generalization:main"
 eudis-swarm-observation-replay = "eudis_swarm.observation_replay:main"
@@ -87,8 +85,6 @@ venv = ".venv"
 branch = true
 source = ["eudis_swarm"]
 omit = [
-    "src/eudis_swarm/dashboard.py",
-    "src/eudis_swarm/dashboard_app.py",
     # Needs a live autopilot to exercise, which CI deliberately does not have.
     # Everything in it that can be tested without one is, in tests/test_sitl.py.
     "src/eudis_swarm/sitl.py",

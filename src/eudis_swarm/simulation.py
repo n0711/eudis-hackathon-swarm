@@ -1581,7 +1581,7 @@ def _parser() -> argparse.ArgumentParser:
         type=str,
         default=None,
         metavar="PATH",
-        help="write a structured dashboard playback trace to PATH",
+        help="write a structured playback trace to PATH",
     )
     parser.add_argument(
         "--log-level",

@@ -26,7 +26,7 @@ interpreter is older):
 ```bash
 python3.11 -m venv .venv
 source .venv/bin/activate
-python -m pip install -e ".[dev,dashboard]"
+python -m pip install -e ".[dev,charts]"
 ```
 
 Full local gate (same as CI, which runs it on Python 3.11 and 3.13):
@@ -54,11 +54,10 @@ python -m eudis_swarm.simulation --help
 eudis-swarm --scenario demo-quorum-floor               # named presets, see README "Named demonstration scenarios"
 python -m eudis_swarm.task_claim_demo                  # fixed 2+2 partition/reconcile/continue demo
 eudis-swarm-sweep --param lease-timeout --from 0.5 --to 6.0 --steps 12 --seeds 20 --output sweep.csv
-eudis-swarm-dashboard trace.json                       # optional Streamlit/Plotly playback (needs the `dashboard` extra)
 ```
 
-`eudis-swarm`, `eudis-swarm-dashboard`, and `eudis-swarm-sweep` are the
-installed console-script equivalents of the `python -m` invocations above.
+`eudis-swarm` and `eudis-swarm-sweep` are the installed console-script
+equivalents of the `python -m` invocations above.
 Named scenario presets (`--scenario ...`) override the matching flags and
 leave every other default untouched — `baseline-quorum-floor` is the one
 preset that deliberately fails and exits non-zero (asserted by test).
@@ -73,7 +72,7 @@ these boundaries:
 | --- | --- | --- |
 | **World / physics** (`agent.py`, `communication.py`, `mission.py`'s `Task` records, `simulation.py`) | real `Agent` positions/responsiveness, the live `CommunicationGraph`, mutable observer-facing `Task` projections | authorize ownership from `Task.assigned_agent`, or hand a remote UAV's live state to local decision logic |
 | **Receiver-local control** (`autonomy.py`, `peer_state.py`, `task_claims.py`, `task_utility.py`) | own pose, the immutable `TaskObjective` catalogue, one `PeerStateStore`, one `TaskClaimStore`, a local execution-intent cache | infer failure from silence alone, copy graph/projected-owner truth in, or act without `owns_task()` |
-| **Observer / evaluation** (`metrics.py`, `trace.py`, `task_claim_trace.py`, the dashboard) | metrics, traces, test assertions comparing belief against truth | feed its privileged view back into allocation or failure decisions |
+| **Observer / evaluation** (`metrics.py`, `trace.py`, `task_claim_trace.py`) | metrics, traces, test assertions comparing belief against truth | feed its privileged view back into allocation or failure decisions |
 
 Per-agent composition (one of each per UAV):
 
@@ -157,11 +156,9 @@ new compound mutation path.
 
 ## Coverage config
 
-`pyproject.toml` deliberately omits `dashboard.py`, `dashboard_app.py`, and
-`sitl.py` from coverage — the first two need a live Streamlit session to
-exercise, and `sitl.py` needs a live autopilot; everything in `sitl.py`
-testable without one is covered by `tests/test_sitl.py` with a mocked
-`pymavlink` connection.
+`pyproject.toml` deliberately omits `sitl.py` from coverage — it needs a live
+autopilot to exercise; everything in it testable without one is covered by
+`tests/test_sitl.py` with a mocked `pymavlink` connection.
 
 ## SITL / vehicle work
 
@@ -176,8 +173,7 @@ can describe a design that was written up but not (yet) merged.
 
 - The checked-in `.venv` may not match `requires-python = ">=3.11"` on this
   machine — check `.venv/bin/python --version` before assuming `pip install
-  -e ".[dev]"` will succeed; an old `pip` in a stale venv can also backtrack
-  for a very long time resolving `streamlit`'s dependency tree. Upgrade `pip`
-  first (`python -m pip install --upgrade pip`) if a resolve seems stuck.
+  -e ".[dev]"` will succeed. Upgrade `pip` first (`python -m pip install
+  --upgrade pip`) if a resolve seems stuck.
 - `pyproject.toml`'s `[project.urls]` still point at `github.com/n0711/eudis-swarm`,
   not this repo's actual name/remote (`eudis-hackathon-swarm`).

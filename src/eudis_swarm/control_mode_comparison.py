@@ -4,10 +4,9 @@ For each seed, this runs the identical scenario twice -- once per control
 mode -- and reports evaluator-computed wasted-work counters side by side,
 plus the centralized-minus-distributed delta. Two of the nine columns here
 (``concurrent_ownership_duration`` / "Double-booked" and
-``dropped_ownership_time`` / "Stranded work") are exactly the two figures the
-belief-comparison dashboard view (``dashboard_app.py``'s
-``_wasted_work_counters``) already renders per mode; the rest are the other
-evaluator counters ``sweep.py``'s own CSV already tracks. Each run is an
+``dropped_ownership_time`` / "Stranded work") are the two headline wasted-work
+figures the trace already carries per frame (`TraceMetrics`); the rest are the
+other evaluator counters ``sweep.py``'s own CSV already tracks. Each run is an
 independent ``Simulation``; nothing here lets one mode's replicas see the
 other mode's evidence, and every value is read from ``SimulationMetrics``
 after a run has already finished, exactly like ``sweep.py``.
@@ -110,7 +109,7 @@ def _parser() -> argparse.ArgumentParser:
         prog="eudis-swarm-mode-compare",
         description=(
             "Compare distributed vs. centralized control on identical seeds, "
-            "on the wasted-work metrics the belief-comparison dashboard uses."
+            "on the evaluator's wasted-work metrics."
         ),
     )
     parser.add_argument(

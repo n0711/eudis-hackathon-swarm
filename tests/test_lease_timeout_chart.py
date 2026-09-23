@@ -1,8 +1,8 @@
 """Offline chart rendering: pure figure construction, no Streamlit involved.
 
-Plotly is an optional dependency (the ``dashboard`` extra), so every test here
-is skipped when it is absent -- the same pattern already used in
-``test_dashboard_comparison.py``.
+Plotly is an optional dependency (the ``charts`` extra), so every test here
+is skipped when it is absent, the same pattern ``lease_timeout_chart.py``
+itself uses to guard its own import.
 """
 
 from __future__ import annotations
