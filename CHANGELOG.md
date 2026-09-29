@@ -8,6 +8,11 @@ and interfaces change between prototypes.
 ## [Unreleased]
 
 ### Added
+- A 960-run paired layout/fault-time sensitivity study and raw CSV, with
+  explicit accounting for scheduled faults that did not occur before completion.
+- A current-state demo runbook and proposed external observation boundary.
+- Documentation alignment for Mission Contract status, paired visualization,
+  source provenance, and limits of the point-mass and standalone SITL results.
 - A paired, 240-run fleet/network generalization check with a reproducible CLI,
   raw CSV, and stated limits (`docs/generalization_study.md`). It varies four
   versus six UAVs and three link regimes while pairing the two control modes
