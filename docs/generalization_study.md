@@ -84,6 +84,6 @@ range/jammer model. The 20 task-placement seeds are paired comparisons, not
 independent evidence about RF or flight performance.
 
 The result survives this *small* change in fleet size and network regime.
-Next test a second independently chosen initial-layout family or failure time
-before claiming broad robustness. When comparing overlap costs, separate stale
-claims on stopped UAVs from simultaneous work by responsive UAVs.
+The [follow-up sensitivity check](robustness_study.md) changes initial layout
+and failure time. When comparing overlap costs, separate stale claims on
+stopped UAVs from simultaneous work by responsive UAVs.
