@@ -8,6 +8,8 @@ document that assumes you know nothing.
 | You want to | Read |
 | --- | --- |
 | Get running and find your way around | [`onboarding.md`](onboarding.md) |
+| Rehearse the current hackathon demonstration | [`demo_runbook.md`](demo_runbook.md) |
+| Define the proposed external ISR observation boundary | [`observation_integration.md`](observation_integration.md) |
 | Know what has actually been measured, and what has not | [`measured_results.md`](measured_results.md) |
 | Inspect the paired fleet/network comparison and raw data | [`generalization_study.md`](generalization_study.md) |
 | Inspect the layout/fault-time sensitivity check | [`robustness_study.md`](robustness_study.md) |
@@ -18,6 +20,7 @@ document that assumes you know nothing.
 | Run the standalone SITL experiment and see the integration plan | [`sitl.md`](sitl.md) |
 | See how the project got here | [`milestones.md`](milestones.md) |
 | Compare against published research and industry | [`prior_art.md`](prior_art.md) |
+| Understand the supplied IN424 exploration material | [`exploration_reference.md`](exploration_reference.md) |
 | Understand the replay interface | [`visualization_layer.md`](visualization_layer.md) |
 
 ## History
