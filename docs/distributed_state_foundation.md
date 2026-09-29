@@ -861,9 +861,9 @@ SNR/BER link equation and seeded packet sampling remain simplified abstractions;
 terrain, interference, measured channel calibration, and realistic RF are not
 implemented.
 
-The exact next milestone is a versioned Mission Contract plus a composed Mission
-EFSM above the current distributed runtime. It should express operator intent,
-constraints, priorities, degradation policy, and explicit mission phases without
-turning centralized planning into runtime task authority. Coordinated search,
-dynamic role/connectivity support, physical topology repair, handoff, safety,
-experiments, quantum-assisted initial planning, and SITL remain later milestones.
+The versioned Mission Contract and composed MissionPhaseEFSM described as the
+next milestone in this historical foundation were subsequently implemented; see
+[Milestone 5](milestones.md). Coordinated search, dynamic role/connectivity
+support, physical topology repair, observation handoff, safety, quantum-assisted
+planning, and SITL integration remain later work. The receiver-local evidence
+boundary and claim-ledger authority remain in force.
