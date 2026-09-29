@@ -56,4 +56,6 @@ For a console-only fallback on Windows, run `.\scripts\pitch-demo.ps1`. If live 
 
 Implemented: deterministic 2-D point-mass simulation, receiver-local task claims, modeled communication faults and failures, central comparison, recorded traces, and one standalone ArduPilot SITL vehicle experiment.
 
-Planned: external ISR observation replay, exploration mapping, relay movement, live swarm SITL integration, physical flight, and calibrated radio or vehicle models. The standalone SITL experiment is not the coordination demonstration.
+Implemented separately: synthetic external ISR observation JSONL replay with receiver-local freshness checks. It is not connected to simulator task discovery or this coordination demonstration.
+
+Planned: live perception input, exploration mapping, relay movement, live swarm SITL integration, physical flight, and calibrated radio or vehicle models. The standalone SITL experiment is not the coordination demonstration.
