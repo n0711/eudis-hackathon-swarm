@@ -33,10 +33,10 @@ classifiers = [
 dependencies = []
 
 [project.urls]
-Homepage = "https://github.com/n0711/eudis-swarm"
-Repository = "https://github.com/n0711/eudis-swarm"
-Issues = "https://github.com/n0711/eudis-swarm/issues"
-Changelog = "https://github.com/n0711/eudis-swarm/blob/main/CHANGELOG.md"
+Homepage = "https://github.com/n0711/eudis-hackathon-swarm"
+Repository = "https://github.com/n0711/eudis-hackathon-swarm"
+Issues = "https://github.com/n0711/eudis-hackathon-swarm/issues"
+Changelog = "https://github.com/n0711/eudis-hackathon-swarm/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
 dev = [
@@ -58,6 +58,7 @@ dashboard = [
 eudis-swarm = "eudis_swarm.simulation:main"
 eudis-swarm-dashboard = "eudis_swarm.dashboard:main"
 eudis-swarm-sweep = "eudis_swarm.sweep:main"
+eudis-swarm-generalization = "eudis_swarm.generalization:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

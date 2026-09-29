@@ -26,7 +26,7 @@ snapshots and receive no fixes.
 ## Reporting a vulnerability
 
 Report suspected vulnerabilities privately through GitHub's
-[private vulnerability reporting](https://github.com/n0711/eudis-swarm/security/advisories/new)
+[private vulnerability reporting](https://github.com/n0711/eudis-hackathon-swarm/security/advisories/new)
 rather than opening a public issue.
 
 Please include the affected version or commit, reproduction steps, and the

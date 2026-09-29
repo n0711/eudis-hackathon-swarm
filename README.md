@@ -63,7 +63,7 @@ failed none, while the two modes detected losses *identically* at every
 communication range — the same awareness, opposite outcomes. Full tables and
 limits: [`docs/measured_results.md`](docs/measured_results.md).
 
-[![CI](https://github.com/n0711/eudis-swarm/actions/workflows/ci.yml/badge.svg)](https://github.com/n0711/eudis-swarm/actions/workflows/ci.yml)
+[![CI](https://github.com/n0711/eudis-hackathon-swarm/actions/workflows/ci.yml/badge.svg)](https://github.com/n0711/eudis-hackathon-swarm/actions/workflows/ci.yml)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue)](https://www.python.org/downloads/)
 [![Coverage gate 85%](https://img.shields.io/badge/coverage%20gate-85%25-brightgreen)](#verification)
 [![Checked with Pyright](https://img.shields.io/badge/types-pyright-informational)](https://microsoft.github.io/pyright/)
@@ -191,11 +191,15 @@ Every number this project claims lives in one place, with the command that
 reproduces it and an explicit statement of what is *not* measured:
 **[`docs/measured_results.md`](docs/measured_results.md)**.
 
-Summarised: the two control modes fail in opposite and cleanly disjoint ways —
-a central coordinator never double-books and strands work it cannot reach,
-while replicated ownership strands nothing and occasionally double-books during
-a partition. Failure detection has a connectivity floor below which a genuinely
-dead aircraft is never declared, and no mission-level number reveals the loss.
+In the original sweep, the two control modes paid different costs:
+the centralized runs in that sweep had no measured overlapping self-claims
+and stranded work they could not reach, while replicated ownership had no
+dropped ownership and occasionally overlapped claims during a partition. A
+separate [fleet/network comparison](docs/generalization_study.md) found brief
+central claim overlap involving a stopped UAV; claim overlap is not necessarily
+duplicate flight. Failure detection has a connectivity floor below which a
+genuinely dead aircraft is never declared, and no mission-level number reveals
+the loss.
 Across 440 runs, central control failed 68 missions and distributed failed none,
 with the two modes detecting losses identically at every range.
 
@@ -537,8 +541,9 @@ eudis-swarm-dashboard trace.json
 Mission Contract + Mission EFSM was the previous recommended milestone and is
 now implemented; see Milestone 5 above. Controlled experiments are partially
 covered: `eudis-swarm-sweep` sweeps lease policy, communication range, failure
-timeout and peer-state staleness against both control modes. RF validation is
-not started.
+timeout and peer-state staleness against both control modes. A separate
+[paired fleet/network comparison](docs/generalization_study.md) checks two
+fleet sizes under three link conditions. RF validation is not started.
 
 Planned work — **not yet implemented**:
 
@@ -559,7 +564,8 @@ Planned work — **not yet implemented**:
 6. **Quantum-simulated initial planning benchmark** — QUBO/QAOA candidate plans
    compared with greedy, heuristic, and exact classical methods where feasible;
    never runtime ownership authority.
-7. **ArduPilot SITL and vehicle adapters**, followed only later by Orounda
+7. **Connect the existing standalone ArduPilot SITL vehicle to the simulator's
+   backend boundary**, followed only later by Orounda
    georeferencing and controlled mixed SITL/physical-UAV validation.
 8. **Larger-swarm scaling and tactical/3-D visualization** after the protocol,
    mission, search, role, and safety boundaries are stable.
@@ -580,18 +586,20 @@ Intended future validation (**planned, not implemented**):
 
 This repository has **no `LICENSE` file**. The source carries an explicit
 `Copyright 2026 Charalampos Nadiotis` notice; all rights are reserved and no
-open-source licence is granted or implied by the repository being public. It is
-published for review.
+open-source licence is granted or implied by access to the repository. The
+current repository is private; visibility and licensing require an explicit
+decision before public distribution.
 
 **Status:** active hackathon R&D / prototype work. Versions track prototype
 milestones, not a stable API — interfaces change between prototypes.
 
-**Not flight software.** This project models UAV coordination algorithmically in
-two dimensions. It contains no autopilot, guidance, navigation, control,
-targeting, validated RF propagation, or safety-critical functionality, and no
-interface to any real vehicle, radio, or autopilot stack. Its optional free-space
-link equation is a deterministic/seeded simulation abstraction, not a field radio
-model. The project must not be deployed on,
+**Not flight software.** The core models UAV coordination algorithmically in
+two dimensions; it has no guidance, navigation, control, targeting, validated
+RF propagation, or safety-critical functionality. The optional `SitlVehicle`
+utility commands one ArduPilot software-in-the-loop instance, but it is not
+connected to `Simulation` and has not been validated for physical vehicles.
+The optional free-space link equation is a deterministic/seeded simulation
+abstraction, not a field radio model. The project must not be deployed on,
 integrated into, or used to command any real vehicle. See
 [`docs/distributed_state_foundation.md`](docs/distributed_state_foundation.md)
 for the modelling boundary and the exhaustive list of current limitations in the

@@ -9,11 +9,12 @@ document that assumes you know nothing.
 | --- | --- |
 | Get running and find your way around | [`onboarding.md`](onboarding.md) |
 | Know what has actually been measured, and what has not | [`measured_results.md`](measured_results.md) |
+| Inspect the paired fleet/network comparison and raw data | [`generalization_study.md`](generalization_study.md) |
 | Understand the state model, quorum, leases and reconciliation | [`distributed_state_foundation.md`](distributed_state_foundation.md) |
 | See the state machines as generated tables | [`autonomy_efsm.md`](autonomy_efsm.md) |
 | Know why the problem is real, with citations | [`threat_context.md`](threat_context.md) |
 | Pick up the vehicle dynamics and energy work | [`vehicle_model.md`](vehicle_model.md) |
-| Fly a real autopilot against the simulator | [`sitl.md`](sitl.md) |
+| Run the standalone SITL experiment and see the integration plan | [`sitl.md`](sitl.md) |
 | See how the project got here | [`milestones.md`](milestones.md) |
 | Compare against published research and industry | [`prior_art.md`](prior_art.md) |
 | Understand the replay interface | [`visualization_layer.md`](visualization_layer.md) |
