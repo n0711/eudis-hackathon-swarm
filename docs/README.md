@@ -9,7 +9,7 @@ document that assumes you know nothing.
 | --- | --- |
 | Get running and find your way around | [`onboarding.md`](onboarding.md) |
 | Rehearse the current hackathon demonstration | [`demo_runbook.md`](demo_runbook.md) |
-| Define the proposed external ISR observation boundary | [`observation_integration.md`](observation_integration.md) |
+| Replay synthetic ISR observations and inspect the integration boundary | [`observation_integration.md`](observation_integration.md) |
 | Know what has actually been measured, and what has not | [`measured_results.md`](measured_results.md) |
 | Inspect the paired fleet/network comparison and raw data | [`generalization_study.md`](generalization_study.md) |
 | Inspect the layout/fault-time sensitivity check | [`robustness_study.md`](robustness_study.md) |
