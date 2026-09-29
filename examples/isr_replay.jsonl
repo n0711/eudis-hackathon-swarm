@@ -1,0 +1,8 @@
+{"receiver_id":"uav_1","received_at":0.0,"record":{"schema_version":1,"record_type":"source_status","uav_id":"isr_01","timestamp_ms":1790590000100,"status":"running"}}
+{"receiver_id":"uav_1","received_at":0.0,"record":{"schema_version":1,"record_type":"source_status","uav_id":"isr_02","timestamp_ms":1790590000100,"status":"running"}}
+{"receiver_id":"uav_1","received_at":0.1,"record":{"schema_version":1,"uav_id":"isr_01","track_id":17,"timestamp_ms":1790590000101,"class_label":"vehicle","confidence":0.87,"bbox_xyxy":[120,85,220,160],"image_size":[640,480],"track_status":"observed"}}
+{"receiver_id":"uav_1","received_at":0.1,"record":{"schema_version":1,"uav_id":"isr_02","track_id":17,"timestamp_ms":1790590000101,"class_label":"vehicle","confidence":0.79,"bbox_xyxy":[20,45,80,110],"image_size":[640,480],"track_status":"observed"}}
+{"receiver_id":"uav_2","received_at":0.1,"delivered":false}
+{"receiver_id":"uav_1","received_at":4.0,"record":{"schema_version":1,"record_type":"source_status","uav_id":"isr_01","timestamp_ms":1790590000104,"status":"running","empty_scene":true}}
+{"receiver_id":"uav_1","received_at":5.0,"record":{"schema_version":1,"record_type":"source_status","uav_id":"isr_02","timestamp_ms":1790590000110,"status":"running"}}
+{"receiver_id":"uav_1","received_at":5.1,"record":{"schema_version":1,"uav_id":"isr_02","track_id":17,"timestamp_ms":1790590000111,"class_label":"vehicle","confidence":0.8,"bbox_xyxy":[24,47,83,114],"image_size":[640,480],"track_status":"observed"}}
