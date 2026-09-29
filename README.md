@@ -200,6 +200,8 @@ central claim overlap involving a stopped UAV; claim overlap is not necessarily
 duplicate flight. Failure detection has a connectivity floor below which a
 genuinely dead aircraft is never declared, and no mission-level number reveals
 the loss.
+The [layout/fault-time check](docs/robustness_study.md) shows how strongly the
+completion gap varies with geometry and when the physical failure happens.
 Across 440 runs, central control failed 68 missions and distributed failed none,
 with the two modes detecting losses identically at every range.
 
@@ -543,7 +545,9 @@ now implemented; see Milestone 5 above. Controlled experiments are partially
 covered: `eudis-swarm-sweep` sweeps lease policy, communication range, failure
 timeout and peer-state staleness against both control modes. A separate
 [paired fleet/network comparison](docs/generalization_study.md) checks two
-fleet sizes under three link conditions. RF validation is not started.
+fleet sizes under three link conditions. A separate
+[sensitivity check](docs/robustness_study.md) changes initial layout and fault
+timing. RF validation is not started.
 
 Planned work — **not yet implemented**:
 

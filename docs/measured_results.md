@@ -215,8 +215,10 @@ concatenated and compared without tracking which file came from where.
 ## What is not measured
 
 The [paired fleet/network comparison](generalization_study.md) adds a second
-small scenario family, with its own raw CSV and limits. It does not remove the
-calibration and generality limits below.
+small scenario family. A [layout/fault-time sensitivity check](robustness_study.md)
+finds that the completion gap depends strongly on the starting geometry and
+when the fault occurs; late-fault ring runs can finish before the scheduled
+failure. Neither removes the calibration and generality limits below.
 
 - **RF validity.** The radio model is an analytical free-space abstraction. It
   has not been compared against measurements and must not be described as
@@ -225,5 +227,5 @@ calibration and generality limits below.
   point-mass motion model, not flight times.
 - **Generality.** The results above use one main scenario family — four UAVs,
   a 100×100 area, one circular jammer — plus a small two-UAV counterexample.
-  The separate 4/6-UAV comparison changes initial geometry with fleet size.
-  Neither establishes how the trade-offs scale across mission geometries.
+  The separate 4/6-UAV comparison changes initial geometry with fleet size;
+  the two-layout follow-up is still a small selection of mission geometries.

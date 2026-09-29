@@ -59,6 +59,7 @@ eudis-swarm = "eudis_swarm.simulation:main"
 eudis-swarm-dashboard = "eudis_swarm.dashboard:main"
 eudis-swarm-sweep = "eudis_swarm.sweep:main"
 eudis-swarm-generalization = "eudis_swarm.generalization:main"
+eudis-swarm-robustness = "eudis_swarm.robustness:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
