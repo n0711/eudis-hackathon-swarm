@@ -8,6 +8,9 @@ and interfaces change between prototypes.
 ## [Unreleased]
 
 ### Added
+- A standalone version-1 JSONL observation replay with isolated receiver views,
+  source/track timeouts, explicit empty scenes, and two-source sample data.
+  It does not connect perception to `Simulation` task creation or movement.
 - A 960-run paired layout/fault-time sensitivity study and raw CSV, with
   explicit accounting for scheduled faults that did not occur before completion.
 - A current-state demo runbook and proposed external observation boundary.
