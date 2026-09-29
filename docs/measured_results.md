@@ -1,7 +1,8 @@
 # Measured results
 
-Every number here comes from `eudis-swarm-sweep` and is reproducible from the
-command printed above it. Nothing in this file is an estimate or an argument;
+The main-scenario numbers here come from `eudis-swarm-sweep` and are
+reproducible from the commands printed above them. The linked fleet and layout
+studies use their own CLIs and committed raw CSV files. Nothing in this file is an estimate or an argument;
 where a result is a negative one, or contradicts what the design was expected
 to show, it is reported as such.
 
