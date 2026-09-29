@@ -77,7 +77,9 @@ and a separate one-vehicle ArduPilot SITL experiment. It does **not** yet includ
 live perception observations, exploration mapping, relay positioning, flight
 safety supervision, or SITL-controlled swarm missions. For a short demonstration
 use the [runbook](docs/demo_runbook.md); for planned perception input see the
-[observation contract](docs/observation_integration.md).
+[observation replay boundary](docs/observation_integration.md). A standalone
+two-source JSONL replay now validates and ages receiver-local observations; it
+does not yet deliver them through `Simulation` or create mission tasks.
 
 ## EUDIS Challenge
 
@@ -388,6 +390,7 @@ eudis-swarm/
 │   ├── mission.py              # claim-authorized execution, observer projection, lifecycle, invariants
 │   ├── vehicle_backend.py      # physical movement protocol + default point-mass backend
 │   ├── evaluation.py           # observer-only coordination cost measurements
+│   ├── observation_replay.py   # receiver-local external observation JSONL replay
 │   ├── generalization.py      # paired fleet/network evaluator CLI
 │   ├── robustness.py          # paired layout/fault-time evaluator CLI
 │   ├── mission_contract.py    # versioned operator intent and degradation policy
@@ -407,6 +410,7 @@ eudis-swarm/
 │   │                           #   communication graph, transport, integration, packaging
 │   └── ...
 ├── scripts/
+├── examples/isr_replay.jsonl    # synthetic two-source observation replay
 │   ├── pitch-demo.ps1                     # runs both quorum-floor scenarios, no activation needed
 │   └── sitl-copter.sh                     # starts one headless ArduCopter SITL instance
 ├── docs/
@@ -416,7 +420,7 @@ eudis-swarm/
 │   ├── generalization_study.md            # paired fleet/network comparison
 │   ├── robustness_study.md                # layout/fault-time sensitivity
 │   ├── demo_runbook.md                    # repeatable hackathon demonstration
-│   ├── observation_integration.md         # proposed external ISR observation boundary
+│   ├── observation_integration.md         # standalone ISR replay and proposed integration boundary
 │   ├── threat_context.md                  # cited GNSS interference context, and what it does not show
 │   ├── distributed_state_foundation.md   # state boundary, EFSM, quorum, leases, reconciliation
 │   ├── autonomy_efsm.md                   # generated transition tables + composition/locality rules
@@ -571,9 +575,9 @@ fleet sizes under three link conditions. A separate
 timing. RF validation is not started.
 
 For the hackathon, first freeze the reproducible coordination comparison and
-recorded-trace presentation. A recorded-observation replay is the next small
-integration candidate; it must not be presented as implemented before an adapter
-and timeout tests exist. The following are longer-term plans, **not yet
+recorded-trace presentation. A standalone recorded-observation replay with
+receiver-local timeouts is implemented; link-mediated delivery into the simulator
+and task discovery are future work. The following are longer-term plans, **not yet
 implemented**:
 
 1. **Coordinated search** — a deterministic execution baseline followed by a
