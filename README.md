@@ -68,6 +68,17 @@ limits: [`docs/measured_results.md`](docs/measured_results.md).
 [![Coverage gate 85%](https://img.shields.io/badge/coverage%20gate-85%25-brightgreen)](#verification)
 [![Checked with Pyright](https://img.shields.io/badge/types-pyright-informational)](https://microsoft.github.io/pyright/)
 
+## Current prototype boundary
+
+The working demonstration is a **deterministic two-dimensional simulation** of
+receiver-local task ownership under communication loss. It includes a point-mass
+`VehicleBackend`, paired centralized comparisons, a recorded-trace dashboard,
+and a separate one-vehicle ArduPilot SITL experiment. It does **not** yet include
+live perception observations, exploration mapping, relay positioning, flight
+safety supervision, or SITL-controlled swarm missions. For a short demonstration
+use the [runbook](docs/demo_runbook.md); for planned perception input see the
+[observation contract](docs/observation_integration.md).
+
 ## EUDIS Challenge
 
 Independent project for the **EUDIS Defence Hackathon 2026 – Autumn Edition**,
@@ -375,6 +386,12 @@ eudis-swarm/
 │   ├── task.py                 # observer Task projection + six-state TaskOwnershipState vocabulary
 │   ├── task_allocator.py       # centralized distance/connectivity comparison baselines
 │   ├── mission.py              # claim-authorized execution, observer projection, lifecycle, invariants
+│   ├── vehicle_backend.py      # physical movement protocol + default point-mass backend
+│   ├── evaluation.py           # observer-only coordination cost measurements
+│   ├── generalization.py      # paired fleet/network evaluator CLI
+│   ├── robustness.py          # paired layout/fault-time evaluator CLI
+│   ├── mission_contract.py    # versioned operator intent and degradation policy
+│   ├── sitl.py                # optional standalone one-vehicle ArduPilot utility
 │   ├── simulation.py           # local claim rounds, logical clock, physics, orchestration, CLI
 │   ├── simulation_events.py    # structured comms / peer-knowledge / task-claim event types
 │   ├── metrics.py              # separate physical-mission and network metric blocks
@@ -396,6 +413,10 @@ eudis-swarm/
 │   ├── README.md                          # index: which document answers which question
 │   ├── onboarding.md                      # start here: setup, reading order, the rules
 │   ├── measured_results.md                # reproducible sweep results, and their stated limits
+│   ├── generalization_study.md            # paired fleet/network comparison
+│   ├── robustness_study.md                # layout/fault-time sensitivity
+│   ├── demo_runbook.md                    # repeatable hackathon demonstration
+│   ├── observation_integration.md         # proposed external ISR observation boundary
 │   ├── threat_context.md                  # cited GNSS interference context, and what it does not show
 │   ├── distributed_state_foundation.md   # state boundary, EFSM, quorum, leases, reconciliation
 │   ├── autonomy_efsm.md                   # generated transition tables + composition/locality rules
@@ -540,8 +561,8 @@ eudis-swarm-dashboard trace.json
 
 ## Roadmap
 
-Mission Contract + Mission EFSM was the previous recommended milestone and is
-now implemented; see Milestone 5 above. Controlled experiments are partially
+Mission Contract + Mission EFSM is implemented; see
+[Milestone 5](docs/milestones.md). Controlled experiments are partially
 covered: `eudis-swarm-sweep` sweeps lease policy, communication range, failure
 timeout and peer-state staleness against both control modes. A separate
 [paired fleet/network comparison](docs/generalization_study.md) checks two
@@ -549,7 +570,11 @@ fleet sizes under three link conditions. A separate
 [sensitivity check](docs/robustness_study.md) changes initial layout and fault
 timing. RF validation is not started.
 
-Planned work — **not yet implemented**:
+For the hackathon, first freeze the reproducible coordination comparison and
+recorded-trace presentation. A recorded-observation replay is the next small
+integration candidate; it must not be presented as implemented before an adapter
+and timeout tests exist. The following are longer-term plans, **not yet
+implemented**:
 
 1. **Coordinated search** — a deterministic execution baseline followed by a
    separately evaluated distributed receding-horizon approach. Ownership answers
@@ -576,7 +601,9 @@ Planned work — **not yet implemented**:
 
 ## EUDIS Demonstration Direction
 
-Intended future validation (**planned, not implemented**):
+The [runbook](docs/demo_runbook.md) describes the current repeatable simulator
+demo. The following are possible future validation steps (**planned, not
+implemented**):
 
 - an **ArduPilot SITL** swarm running the coordination logic;
 - deployment at the **USRL Orounda Airfield** site;
