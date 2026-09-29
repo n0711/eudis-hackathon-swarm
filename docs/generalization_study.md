@@ -85,5 +85,6 @@ independent evidence about RF or flight performance.
 
 The result survives this *small* change in fleet size and network regime.
 The [follow-up sensitivity check](robustness_study.md) changes initial layout
-and failure time. When comparing overlap costs, separate stale claims on
+and failure time and shows that the completion gap changes sharply. Interpret
+this table as one controlled scenario family, not a general performance rate. When comparing overlap costs, separate stale claims on
 stopped UAVs from simultaneous work by responsive UAVs.

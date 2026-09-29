@@ -79,6 +79,10 @@ stopped UAV; they are not a count of duplicate flights.
 
 ## Limits
 
+The paired aggregate includes scheduled late faults that did not occur before
+mission completion. Use the `failure_injected` column when comparing actual
+post-fault recovery, and keep the paired condition intact when filtering.
+
 All runs use the same point-mass vehicle and abstract deterministic range graph.
 Varying layout and failure time exposes sensitivity inside that model; it does
 not establish radio performance, safe flight, or broad statistical robustness.

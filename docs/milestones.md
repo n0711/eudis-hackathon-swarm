@@ -7,7 +7,9 @@ rather than reference — for what the system does now, start with
 
 Paths below are relative to the repository root.
 
-Everything here is implemented and regression-tested.
+Everything here is implemented and regression-tested. The standalone SITL
+experiment and evaluator-only sensitivity studies are described in their own
+pages; neither adds flight-control semantics to the coordination simulator.
 
 ### Milestone 1 — Distributed State Hardening
 
@@ -238,3 +240,19 @@ Modules: [`mission_contract.py`](../src/eudis_swarm/mission_contract.py),
 - **Selectable control mode.** `--task-control` chooses replicated distributed
   ownership or the centralized coordinator baseline, which makes the two
   directly comparable rather than merely described.
+
+### Subsequent engineering and evaluation work
+
+- **Physical movement boundary.** `VehicleBackend` and `PointMassBackend` route
+  physical simulation movement through one interface while retaining the
+  point-mass result and a separate analytical communication-only projection.
+  [SITL integration](sitl.md) remains a future adapter; a standalone
+  `SitlVehicle` commands one ArduPilot instance outside `Simulation`.
+- **Paired evaluations.** The [fleet/network study](generalization_study.md)
+  compares four and six UAVs. The [layout/fault-time study](robustness_study.md)
+  adds a second starting layout and two scheduled fault times. Both are
+  evaluator-side experiments using the existing coordination logic and report
+  their raw rows and limits.
+- **Presentation path.** The [demo runbook](demo_runbook.md) uses the frozen
+  deterministic scenarios and recorded trace playback. External ISR
+  [observation integration](observation_integration.md) remains proposed.

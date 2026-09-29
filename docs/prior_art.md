@@ -10,17 +10,18 @@ official developer pages on 2026-09-03.
 ## Repository scope
 
 At the starting baseline for the formal-autonomy milestone, the repository
-already implements receiver-local peer evidence, immutable multi-hop protocol
+already implemented receiver-local peer evidence, immutable multi-hop protocol
 flooding, lease-based distributed task ownership, deterministic split-brain
 reconciliation, and simulated range/radio/jammer link behaviour. Centralized
 allocators remain comparison baselines rather than operational authority.
 
-The current milestone adds explicit receiver-local contact, peer-availability,
-task-ownership-conformance, and coordination-mode EFSMs. A mission contract and
-Mission EFSM, coordinated 3-D search, dynamic connectivity-support roles,
-physical topology repair, deconfliction, quantum-assisted planning, autopilot
-integration, and hardware validation remain future work. The implementation and
-its tests are authoritative; this literature review is not.
+That milestone added explicit receiver-local contact, peer-availability,
+task-ownership-conformance, and coordination-mode EFSMs. A versioned Mission
+Contract and MissionPhaseEFSM were added later; see [Milestone 5](milestones.md).
+Coordinated 3-D search, dynamic connectivity-support roles, physical topology
+repair, deconfliction, quantum-assisted planning, autopilot integration, and
+hardware validation remain future work. The implementation and its tests are
+authoritative; this literature review is not.
 
 ## Evidence comparison
 

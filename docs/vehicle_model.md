@@ -106,7 +106,9 @@ These are genuinely open. Decide them and record the decision here.
 
 ## Acceptance
 
-The lane is done when a run of `eudis-swarm --scenario baseline` produces a
-mission duration we are willing to describe in seconds of flight, with the
-reasoning written down, and when the *What is not measured* section of
-[`measured_results.md`](measured_results.md) is one bullet shorter.
+The lane is done only after a named airframe model is calibrated against
+observations, the new scenario is rerun with that model, and its flight-time
+claim is supported by documented error bounds. A new turn-rate or battery
+equation alone does not turn existing point-mass logical seconds into measured
+flight seconds. Keep the existing results and their limits intact until a
+separate validated data set replaces them.
