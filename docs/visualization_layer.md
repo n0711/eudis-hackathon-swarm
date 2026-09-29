@@ -56,7 +56,10 @@ eudis-swarm-dashboard trace.json
 ```
 
 The dashboard also accepts a path or uploaded JSON file from its sidebar. It
-starts paused at the first frame with UAV 1 selected.
+starts paused at the first frame with UAV 1 selected. For a paired comparison,
+record `demo-quorum-floor` and `baseline-quorum-floor` separately, open one
+trace, and choose **Belief comparison** in the sidebar to load the second. The
+centralized scenario deliberately exits nonzero but still writes its trace.
 
 Generate the communication-outage acceptance trace:
 
@@ -93,8 +96,8 @@ predicted peer degree 1, and predicted isolation `NO`.
 
 ## Current limitations
 
-- Playback is single-trace; side-by-side policy comparison is intentionally
-  deferred, while the versioned metadata and frame model support adding it.
+- Belief comparison can show two recorded traces side by side, aligned by
+  logical time. It is a post-run comparison, not live multi-vehicle telemetry.
 - UAV selection uses a reliable select box rather than custom bidirectional
   Plotly click callbacks.
 - Event markers use frame/event times rather than a custom continuous animation
