@@ -118,7 +118,7 @@ architectural boundaries section.
 | --- | --- | --- |
 | Vehicle dynamics and energy | [`vehicle_model.md`](vehicle_model.md) | Self-contained, needs no knowledge of the coordination layer. Three independently mergeable pieces. |
 | Software in the loop | [`sitl.md`](sitl.md) | The simulator has a point-mass backend; a separate one-vehicle ArduPilot experiment and model-error measurement exist. Connecting telemetry to Simulation is a separate design step before multi-vehicle work. |
-| External observation replay | [`observation_integration.md`](observation_integration.md) | Proposed interface only; no ISR adapter is implemented. |
+| External observation replay | [`observation_integration.md`](observation_integration.md) | Standalone synthetic JSONL replay exists; simulator integration and real ISR output remain future work. |
 | Exploration reference | [`exploration_reference.md`](exploration_reference.md) | Ground-robot prior art, not current swarm functionality. |
 | Quantum allocation | not started | The one thing the challenge text names that is not built. Plugs in behind the existing allocation policy interface. |
 
