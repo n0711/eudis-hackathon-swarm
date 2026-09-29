@@ -233,6 +233,11 @@ startup time per vehicle.
 
 ## Honest assessment
 
+For the October hackathon, use the deterministic simulator and its trace replay
+as the primary demonstration. The standalone one-vehicle SITL result supports a
+model-error discussion; it does not demonstrate swarm coordination on ArduPilot.
+See the [demo runbook](demo_runbook.md) for the repeatable presentation path.
+
 Phase 1 is worth doing regardless: it removes a duplicated motion model and
 names a distinction the code was blurring.
 
