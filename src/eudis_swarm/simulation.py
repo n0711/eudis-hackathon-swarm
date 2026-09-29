@@ -94,6 +94,7 @@ from .task_utility import (
 )
 from .trace import SimulationTrace, TraceRecorder
 from .validation import validate_timestamp
+from .vehicle_backend import PointMassBackend, VehicleBackend
 
 LOGGER = logging.getLogger(__name__)
 
@@ -167,8 +168,12 @@ class Simulation:
         agents: Sequence[Agent] | None = None,
         tasks: Sequence[Task] | None = None,
         capture_trace: bool = False,
+        vehicle_backend: VehicleBackend | None = None,
     ) -> None:
         self.config = config
+        self.vehicle_backend: VehicleBackend = (
+            vehicle_backend if vehicle_backend is not None else PointMassBackend()
+        )
         scenario_agents, scenario_tasks = build_scenario(config)
         selected_agents = list(agents) if agents is not None else scenario_agents
         selected_tasks = list(tasks) if tasks is not None else scenario_tasks
@@ -443,7 +448,7 @@ class Simulation:
             if task_id is None:
                 continue
             objective = self._task_objectives_by_id[task_id]
-            agent.move_toward(objective.position, elapsed)
+            self.vehicle_backend.move_toward(agent, objective.position, elapsed)
 
     def _project_positions(
         self, elapsed: float, timestamp: float

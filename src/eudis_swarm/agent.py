@@ -157,16 +157,11 @@ class Agent:
         self.release_task(task_id)
 
     def move_toward(self, target: Position, elapsed: float) -> None:
-        """Advance toward a target using a constant-speed point update."""
+        """Compatibility entry point for point-mass movement outside Simulation."""
 
-        elapsed = validate_timestamp(elapsed, previous=0.0, name="elapsed")
-        # Keyed on physical truth, never on the swarm's belief: a UAV that has
-        # actually stopped does not move, while one merely *declared* failed
-        # keeps flying, because `declare_failed` never touches `responsive`.
-        if not self.responsive:
-            return
+        from .vehicle_backend import PointMassBackend
 
-        self.position = advance_point_mass(self.position, target, self.speed, elapsed)
+        PointMassBackend().move_toward(self, target, elapsed)
 
     def send_heartbeat(self, timestamp: float) -> Heartbeat | None:
         """Return a state snapshot, or nothing after a physical failure."""
