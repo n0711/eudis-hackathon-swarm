@@ -51,14 +51,14 @@ On Windows, `.\scripts\pitch-demo.ps1` runs both back to back.
 
 ## Read the code in this order
 
-Twenty-six modules is a lot. These six, in order, are enough to understand
+The package has several modules. These six areas, in order, are enough to understand
 everything else. Every module has a docstring saying what it is for; those are
 accurate and worth trusting.
 
 | Order | Module | Lines | Why this one |
 | ---: | --- | ---: | --- |
 | 1 | [`config.py`](../src/eudis_swarm/config.py) | ~240 | Every knob in the simulation, in one place. The docstring groups them; read it as a table of contents. |
-| 2 | [`agent.py`](../src/eudis_swarm/agent.py) | ~210 | Authoritative world truth: where an aircraft *actually* is. Small, and the boundary everything else is defined against. |
+| 2 | [`agent.py`](../src/eudis_swarm/agent.py) and [`vehicle_backend.py`](../src/eudis_swarm/vehicle_backend.py) | ~240 | Authoritative world state and the point-mass backend that advances physical position. |
 | 3 | [`peer_state.py`](../src/eudis_swarm/peer_state.py) | ~330 | What one UAV has actually received about its peers. This is the idea of the project made concrete. |
 | 4 | [`task_claims.py`](../src/eudis_swarm/task_claims.py) | ~1050 | Ownership without a coordinator: leases, epochs, contested reconciliation. The docstring has the lifecycle diagram. |
 | 5 | [`autonomy.py`](../src/eudis_swarm/autonomy.py) | ~1900 | The pure decision kernel. Big, but it is five small state machines side by side, each with the same five-part shape (see the docstring). |
@@ -116,7 +116,7 @@ architectural boundaries section.
 | Lane | Start at | Notes |
 | --- | --- | --- |
 | Vehicle dynamics and energy | [`vehicle_model.md`](vehicle_model.md) | Self-contained, needs no knowledge of the coordination layer. Three independently mergeable pieces. |
-| Software in the loop | [`sitl.md`](sitl.md) | Phases 1-3 done: a real ArduPilot vehicle flies commands from the simulator's frame. Phase 4 is multi-vehicle. |
+| Software in the loop | [`sitl.md`](sitl.md) | The simulator has a point-mass backend; a separate one-vehicle ArduPilot experiment and model-error measurement exist. Connecting telemetry to Simulation is a separate design step before multi-vehicle work. |
 | Quantum allocation | not started | The one thing the challenge text names that is not built. Plugs in behind the existing allocation policy interface. |
 
 Ask before starting a large change. The architecture has a small number of

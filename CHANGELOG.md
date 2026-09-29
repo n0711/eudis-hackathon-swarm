@@ -8,6 +8,15 @@ and interfaces change between prototypes.
 ## [Unreleased]
 
 ### Added
+- A paired, 240-run fleet/network generalization check with a reproducible CLI,
+  raw CSV, and stated limits (`docs/generalization_study.md`). It varies four
+  versus six UAVs and three link regimes while pairing the two control modes
+  on the same task-placement seeds.
+- A regression test demonstrating that a brief central claim overlap can
+  include a physically stopped UAV, without implying duplicate flight.
+- Documentation of the implemented `VehicleBackend` interface and the
+  standalone `SitlVehicle` experiment; project links point to this repository
+  rather than its archived predecessor.
 - **The motion model measured against real firmware.**
   `scripts/sitl_model_error.py` flies a leg repeatedly under ArduCopter SITL and
   compares each sample against what `advance_point_mass` said would be there.
@@ -15,9 +24,10 @@ and interfaces change between prototypes.
   34 m on a 60 m leg -- lands exactly when the model says the aircraft has
   arrived and stopped. Reported as a range rather than a mean because SITL is
   not reproducible, and kept out of `measured_results.md` for the same reason.
-  The consequence is not cosmetic: the connectivity-aware allocator chooses
-  assignments from that projection, so it evaluates link graphs for positions no
-  aircraft will occupy.
+  This establishes model error for one standalone SITL vehicle. Its effect on
+  delivered peer evidence and coordination choices has not yet been measured;
+  the connectivity-aware scorer does not consume the communication-only
+  `Simulation._project_positions` projection directly.
 - `SitlVehicle.vehicle_time_s`, the autopilot's own clock. SITL is routinely run
   faster than real time, and a wall-clock stopwatch reports a 60 m leg taking
   one second under `--speedup 10`. The first version of the experiment measured
@@ -458,4 +468,4 @@ and interfaces change between prototypes.
   reproducing the `4.00 -> 5.75 -> 10.75 -> 17.25 s` sequence with zero human
   interventions.
 
-[Unreleased]: https://github.com/n0711/eudis-swarm/compare/main...HEAD
+[Unreleased]: https://github.com/n0711/eudis-hackathon-swarm/compare/main...HEAD

@@ -70,10 +70,14 @@ eudis-swarm-sweep --param lease-timeout --from 0.5 --to 6.0 --steps 12 --seeds 2
 All 480 runs completed 20/20. Mission duration was insensitive to the lease in
 both modes: 10.74 s centralized, 10.80 s distributed.
 
-**The signatures are cleanly disjoint.** A central coordinator serialises every
-assignment, so two UAVs never both believe they own a task — concurrent
-ownership is structurally zero, in every one of 240 runs. What it does instead
-is hand work to aircraft it cannot reach, and that work is stranded.
+**In this sweep, the signatures are disjoint.** Centralized control had zero
+measured concurrent ownership in all 240 runs. This is an observation for this
+configuration, not a structural guarantee: the later
+[paired fleet/network comparison](generalization_study.md) found brief
+overlapping self-claims in four high-range centralized runs. The evaluator
+counts claim views, including a stopped aircraft's, rather than simultaneous
+flight. Central control also handed work to aircraft it could not reach, and
+that work was stranded.
 Replicated ownership strands nothing and pays with occasional double-booking
 during a partition. Neither approach is better; they are wrong in different
 directions.
@@ -210,11 +214,16 @@ concatenated and compared without tracking which file came from where.
 
 ## What is not measured
 
+The [paired fleet/network comparison](generalization_study.md) adds a second
+small scenario family, with its own raw CSV and limits. It does not remove the
+calibration and generality limits below.
+
 - **RF validity.** The radio model is an analytical free-space abstraction. It
   has not been compared against measurements and must not be described as
   calibrated RF.
 - **Absolute timings.** Durations are logical simulation seconds under a
   point-mass motion model, not flight times.
-- **Generality.** Every result above uses one scenario family — four UAVs, a
-  100×100 area, one circular jammer. Nothing here establishes how these
-  trade-offs scale with fleet size or mission geometry.
+- **Generality.** The results above use one main scenario family — four UAVs,
+  a 100×100 area, one circular jammer — plus a small two-UAV counterexample.
+  The separate 4/6-UAV comparison changes initial geometry with fleet size.
+  Neither establishes how the trade-offs scale across mission geometries.

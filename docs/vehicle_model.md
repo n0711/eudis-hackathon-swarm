@@ -6,9 +6,10 @@ merged in independent pieces.
 
 ## What exists today
 
-Motion is a constant-speed point update. `Agent.move_toward` in
-[`agent.py`](../src/eudis_swarm/agent.py) advances an aircraft straight at the
-target at `agent_speed` (default `10.0`), clamped so it never overshoots. There
+Motion is a constant-speed point update. The default
+[`PointMassBackend`](../src/eudis_swarm/vehicle_backend.py) advances an aircraft
+straight at the target at `agent_speed` (default `10.0`), clamped so it never
+overshoots. `Agent.move_toward` delegates to that backend for compatibility. There
 is no turn constraint, no acceleration, no energy, and no endurance. An aircraft
 can reverse direction instantaneously and fly forever.
 
@@ -19,10 +20,11 @@ logical simulation seconds rather than flight times.
 
 ## Why this lane is worth doing
 
-**It retires a stated limitation.** "Absolute timings" is currently listed under
-*What is not measured*. A defensible vehicle model converts every existing
-result from "logical seconds" to "flight seconds for an airframe of this class"
-without re-running the argument.
+**It can address a stated limitation.** "Absolute timings" is currently listed
+under *What is not measured*. A calibrated and validated vehicle model, followed
+by new runs, could support airframe-specific flight-time claims. Merely adding
+turn-rate or energy equations would not make the existing logical-time results
+physical flight measurements.
 
 **It creates a second, independent cause of silence.** Today an aircraft goes
 quiet because it was jammed or because it was scripted to stop. Energy depletion

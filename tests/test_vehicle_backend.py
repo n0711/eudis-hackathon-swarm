@@ -7,6 +7,7 @@ from dataclasses import replace
 import pytest
 
 from eudis_swarm.agent import Agent, Position
+from eudis_swarm.communication import RegionJammer
 from eudis_swarm.config import SimulationConfig
 from eudis_swarm.simulation import Simulation
 from eudis_swarm.vehicle_backend import PointMassBackend, VehicleBackend
@@ -68,3 +69,24 @@ def test_simulation_routes_motion_through_backend_without_changing_results() -> 
     )
     assert injected.position_history[2][-1] == (3.5, (95.0, 5.0))
     assert injected.metrics.completed_task_count == 1
+
+
+def test_communication_only_boundaries_do_not_advance_backend() -> None:
+    config = replace(
+        SimulationConfig(),
+        agent_count=2,
+        task_count=1,
+        task_control="centralized",
+        failure_time=100.0,
+        max_simulation_time=10.0,
+        random_seed=7,
+        region_jammer=RegionJammer(50.0, 50.0, 10.0, 0.35, 0.45),
+    )
+    backend = RecordingBackend()
+
+    result = Simulation(config, vehicle_backend=backend).run()
+
+    timestamps = {time for time, _ in result.position_history[1]}
+    assert {0.35, 0.45} <= timestamps
+    assert backend.calls
+    assert all(elapsed == 0.25 for _, _, elapsed in backend.calls)
