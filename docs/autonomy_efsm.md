@@ -330,15 +330,11 @@ Initial state: `BRIEFED`
   not implement coordinated search, relay optimization, quantum optimization,
   hardware-in-the-loop, or SITL behavior.
 
-## Exact next milestone: Milestone 5 — Mission Contract + Mission EFSM
+## Later milestone status
 
-The next milestone is to add an authorized, versioned Mission Contract that
-expresses operator intent, operating area, constraints, priorities, and
-degradation policy rather than per-aircraft commands. Above distributed task
-execution, a Mission EFSM should formalize phases such as `INITIALIZE`,
-`SEARCH`, `OBSERVE`, `RECOVER`, `RETURN`, and `COMPLETE`, and consume existing
-requested effects where that is semantically appropriate.
-
-That milestone must preserve the receiver-local evidence boundary and the
-existing claim ledger's authority. Coordinated search, relay behavior, QAOA,
-and SITL are later milestones, not implied by the kernel implemented here.
+The versioned `MissionContract` and composed `MissionPhaseEFSM` were subsequently
+implemented; see [Milestone 5](milestones.md) and the current architecture in
+the [README](../README.md). This page describes the receiver-local autonomy
+kernel at the earlier milestone. Its requested effects are still not a generic
+dispatcher for search, relay behaviour, or flight control. Coordinated search,
+relay roles, QAOA, and SITL integration remain separate future work.
