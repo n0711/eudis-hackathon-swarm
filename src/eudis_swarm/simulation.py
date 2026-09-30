@@ -76,6 +76,12 @@ from .messaging import (
 from .metrics import SimulationMetrics
 from .mission import Mission
 from .mission_contract import DegradationPolicy, build_contract
+from .observation_replay import ReceiverObservations
+from .observation_transport import (
+    ObservationPublication,
+    ObservationReceipt,
+    ObservationTransport,
+)
 from .peer_state import PeerStateStore
 from .simulation_events import (
     CommunicationEvent,
@@ -86,6 +92,7 @@ from .simulation_events import (
 from .task import Task, TaskOwnershipState
 from .task_allocator import Allocation, CommunicationAwareTaskAllocator, TaskAllocator
 from .task_claims import TaskClaimStore
+from .task_discovery import ReceiverTaskDiscovery, build_discovery_catalog
 from .task_utility import (
     LocalTaskUtility,
     ReceiverLocalTaskUtility,
@@ -111,6 +118,9 @@ class SimulationResult:
     task_claim_stores: dict[int, TaskClaimStore] | None = None
     autonomy_kernels: dict[int, LocalAutonomyKernel] | None = None
     trace: SimulationTrace | None = None
+    observation_stores: dict[int, ReceiverObservations] | None = None
+    task_discoveries: dict[int, ReceiverTaskDiscovery] | None = None
+    observation_receipts: tuple[ObservationReceipt, ...] = ()
 
 
 def _initial_positions(config: SimulationConfig) -> list[Position]:
@@ -169,6 +179,7 @@ class Simulation:
         tasks: Sequence[Task] | None = None,
         capture_trace: bool = False,
         vehicle_backend: VehicleBackend | None = None,
+        observation_publications: Sequence[ObservationPublication] = (),
     ) -> None:
         self.config = config
         self.vehicle_backend: VehicleBackend = (
@@ -182,6 +193,44 @@ class Simulation:
         if len(selected_tasks) != config.task_count:
             raise ValueError("provided tasks must match config.task_count")
         selected_agent_ids = {agent.agent_id for agent in selected_agents}
+        if observation_publications and config.task_control != "distributed":
+            raise ValueError("observations require distributed task control")
+        source_bindings: dict[str, int] = {}
+        for publication in observation_publications:
+            if publication.source_agent_id not in selected_agent_ids:
+                raise ValueError("unknown observation source agent")
+            producer = publication.record.uav_id
+            if (
+                producer in source_bindings
+                and source_bindings[producer] != publication.source_agent_id
+            ):
+                raise ValueError("observation producer must map to exactly one UAV")
+            source_bindings[producer] = publication.source_agent_id
+        self._observation_publications = tuple(
+            sorted(observation_publications, key=lambda item: item.published_at)
+        )
+        self._next_observation = 0
+        self._initial_task_ids = frozenset(task.task_id for task in selected_tasks)
+        catalog = build_discovery_catalog(
+            self._observation_publications,
+            first_task_id=max(self._initial_task_ids, default=0) + 1,
+            width=config.area_width,
+            height=config.area_height,
+        )
+        selected_tasks.extend(
+            Task(objective.task_id, objective.position)
+            for objective in catalog.values()
+        )
+        self.observation_stores = {
+            agent_id: ReceiverObservations() for agent_id in sorted(selected_agent_ids)
+        }
+        self.task_discoveries = {
+            agent_id: ReceiverTaskDiscovery(
+                {key: objective.task_id for key, objective in catalog.items()}
+            )
+            for agent_id in sorted(selected_agent_ids)
+        }
+        self.observation_receipts: list[ObservationReceipt] = []
         if config.failure_agent_id not in selected_agent_ids:
             raise ValueError("failure_agent_id is not present in provided agents")
         if (
@@ -259,6 +308,9 @@ class Simulation:
         self.task_claim_transport = TaskClaimTransport(
             self.communication_graph, self.task_claim_stores
         )
+        self.observation_transport = ObservationTransport(
+            self.communication_graph, self.observation_stores
+        )
         self.task_objectives = tuple(
             sorted(
                 (
@@ -326,6 +378,25 @@ class Simulation:
         self._ownership_evaluator = OwnershipEvaluator(metrics)
         self._has_run = False
         self._trace_recorder = TraceRecorder(config) if capture_trace else None
+
+    def _deliver_observations(self, timestamp: float) -> None:
+        """Consume due publications; discover only from each private receiver store."""
+        while self._next_observation < len(self._observation_publications):
+            publication = self._observation_publications[self._next_observation]
+            if publication.published_at > timestamp + 1e-12:
+                break
+            self.observation_receipts.extend(
+                self.observation_transport.deliver(
+                    publication,
+                    now=timestamp,
+                    participants=self._participating_agent_ids(),
+                )
+            )
+            self._next_observation += 1
+        for agent_id in self._participating_agent_ids():
+            self.task_discoveries[agent_id].discover(
+                self.observation_stores[agent_id], now=timestamp
+            )
 
     def _maybe_amend_contract(self, timestamp: float) -> None:
         """Hand an amendment to one UAV and let it spread as ordinary evidence.
@@ -679,6 +750,18 @@ class Simulation:
                 timestamp,
             )
 
+    def _local_task_objectives(self, agent_id: int) -> tuple[TaskObjective, ...]:
+        """Briefed tasks plus coordinates supplied by this receiver's evidence."""
+        initial = tuple(
+            objective
+            for objective in self.task_objectives
+            if objective.task_id in self._initial_task_ids
+        )
+        discovered = tuple(
+            task.objective for task in self.task_discoveries[agent_id].tasks
+        )
+        return initial + discovered
+
     def _local_communication_costs(self, agent_id: int) -> dict[int, float]:
         """Derive optional task costs from this receiver's delivered peer copies."""
 
@@ -690,7 +773,7 @@ class Simulation:
         )
         maximum_peer_count = len(self.mission.agents) - 1
         costs: dict[int, float] = {}
-        for objective in self.task_objectives:
+        for objective in self._local_task_objectives(agent_id):
             predicted_degree = sum(
                 math.hypot(
                     objective.position[0] - peer_position[0],
@@ -733,7 +816,7 @@ class Simulation:
                 continue
             candidates = tuple(
                 objective
-                for objective in self.task_objectives
+                for objective in self._local_task_objectives(agent.agent_id)
                 if store.can_create_claim(objective.task_id, timestamp)
             )
             ranked = self._rank_local_objectives(agent, candidates)
@@ -856,7 +939,7 @@ class Simulation:
             store = self.task_claim_stores[agent.agent_id]
             owned_objectives = tuple(
                 objective
-                for objective in self.task_objectives
+                for objective in self._local_task_objectives(agent.agent_id)
                 if store.view(objective.task_id, timestamp).state
                 is TaskOwnershipState.OWNED_BY_SELF
             )
@@ -1193,6 +1276,7 @@ class Simulation:
             self._update_communication_graph(0.0)
 
         self._advance_peer_freshness(0.0)
+        self._deliver_observations(0.0)
         self._deliver_peer_state(initial_snapshots, 0.0)
         self._complete_initial_arrivals()
         self.mission.assert_consistent()
@@ -1212,6 +1296,10 @@ class Simulation:
                 next_heartbeat,
                 self.config.max_simulation_time,
             ]
+            if self._next_observation < len(self._observation_publications):
+                event_times.append(
+                    self._observation_publications[self._next_observation].published_at
+                )
             if (
                 not failure_injected
                 and self.config.failure_time > current_time + epsilon
@@ -1254,8 +1342,17 @@ class Simulation:
                 not failure_injected and timestamp + epsilon >= self.config.failure_time
             )
             maximum_time_due = timestamp + epsilon >= self.config.max_simulation_time
+            observation_due = (
+                self._next_observation < len(self._observation_publications)
+                and self._observation_publications[self._next_observation].published_at
+                <= timestamp + epsilon
+            )
             mission_boundary = (
-                motion_due or heartbeat_due or failure_due or maximum_time_due
+                motion_due
+                or heartbeat_due
+                or failure_due
+                or maximum_time_due
+                or observation_due
             )
             if mission_boundary:
                 # Real motion of every executing UAV since the last physical update.
@@ -1306,6 +1403,8 @@ class Simulation:
                 self.mission.assert_consistent()
                 self._capture_trace_frame(timestamp, communication_positions)
                 continue
+
+            self._deliver_observations(timestamp)
 
             # --- mission-boundary pipeline (order is asserted by tests) ---
             # (4) publish + deliver heartbeats. Publication precedes
@@ -1384,6 +1483,9 @@ class Simulation:
             task_claim_stores=dict(self.task_claim_stores),
             autonomy_kernels=dict(self.autonomy_kernels),
             trace=trace,
+            observation_stores=dict(self.observation_stores),
+            task_discoveries=dict(self.task_discoveries),
+            observation_receipts=tuple(self.observation_receipts),
         )
         LOGGER.info("\n%s", result.metrics.format_summary())
         return result
