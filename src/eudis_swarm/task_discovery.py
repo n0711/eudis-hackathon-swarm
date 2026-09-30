@@ -13,6 +13,30 @@ from typing import Mapping, Sequence
 from .observation_replay import ReceiverObservations, TrackObservation
 from .observation_transport import ObservationPublication
 from .task_utility import TaskObjective
+from .validation import (
+    validate_nonnegative_real,
+    validate_positive_integer,
+    validate_timestamp,
+)
+
+
+@dataclass(frozen=True)
+class TaskDescription:
+    """Immutable accepted inspection work, not a current sensor observation."""
+
+    objective: TaskObjective
+    source_uav_id: str
+    track_id: int
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.source_uav_id, str) or not self.source_uav_id.strip():
+            raise ValueError("description source_uav_id must be nonempty")
+        if (
+            isinstance(self.track_id, bool)
+            or not isinstance(self.track_id, int)
+            or self.track_id < 0
+        ):
+            raise ValueError("description track_id must be a nonnegative integer")
 
 
 @dataclass(frozen=True)
@@ -21,6 +45,12 @@ class DiscoveredTask:
     source_uav_id: str
     track_id: int
     discovered_at: float
+    learned_via: str = "observation"
+    forwarder_agent_id: int | None = None
+
+    @property
+    def description(self) -> TaskDescription:
+        return TaskDescription(self.objective, self.source_uav_id, self.track_id)
 
 
 def build_discovery_catalog(
@@ -70,10 +100,45 @@ class ReceiverTaskDiscovery:
         self._task_ids_by_track = dict(task_ids)
         self.minimum_confidence = minimum_confidence
         self._tasks: dict[int, DiscoveredTask] = {}
+        self._last_timestamp = 0.0
+
+    def receive_description(
+        self,
+        description: TaskDescription,
+        *,
+        received_at: float,
+        forwarder_agent_id: int,
+    ) -> bool:
+        """Learn coordinates from a delivered description, without sensor freshness."""
+        validate_positive_integer(forwarder_agent_id, name="description forwarder")
+        received_at = validate_timestamp(
+            received_at, previous=self._last_timestamp, name="description receipt time"
+        )
+        self._last_timestamp = received_at
+        key = (description.source_uav_id, description.track_id)
+        task_id = description.objective.task_id
+        if self._task_ids_by_track.get(key) != task_id:
+            raise ValueError("description identity does not match reserved task ID")
+        existing = self._tasks.get(task_id)
+        if existing is not None:
+            if existing.description != description:
+                raise ValueError("conflicting stationary task description")
+            return False
+        self._tasks[task_id] = DiscoveredTask(
+            description.objective,
+            *key,
+            received_at,
+            "task_description",
+            forwarder_agent_id,
+        )
+        return True
 
     def discover(
         self, observations: ReceiverObservations, *, now: float
     ) -> tuple[DiscoveredTask, ...]:
+        now = validate_nonnegative_real(now, name="discovery time")
+        validate_timestamp(now, previous=self._last_timestamp, name="discovery time")
+        self._last_timestamp = now
         added = []
         for record in observations.active_tracks(now=now):
             if (

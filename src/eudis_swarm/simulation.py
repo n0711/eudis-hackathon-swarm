@@ -92,6 +92,7 @@ from .simulation_events import (
 from .task import Task, TaskOwnershipState
 from .task_allocator import Allocation, CommunicationAwareTaskAllocator, TaskAllocator
 from .task_claims import TaskClaimStore
+from .task_description_transport import TaskDescriptionReceipt, TaskDescriptionTransport
 from .task_discovery import ReceiverTaskDiscovery, build_discovery_catalog
 from .task_utility import (
     LocalTaskUtility,
@@ -121,6 +122,7 @@ class SimulationResult:
     observation_stores: dict[int, ReceiverObservations] | None = None
     task_discoveries: dict[int, ReceiverTaskDiscovery] | None = None
     observation_receipts: tuple[ObservationReceipt, ...] = ()
+    task_description_receipts: tuple[TaskDescriptionReceipt, ...] = ()
 
 
 def _initial_positions(config: SimulationConfig) -> list[Position]:
@@ -180,8 +182,12 @@ class Simulation:
         capture_trace: bool = False,
         vehicle_backend: VehicleBackend | None = None,
         observation_publications: Sequence[ObservationPublication] = (),
+        share_discovered_tasks: bool = True,
     ) -> None:
         self.config = config
+        if not isinstance(share_discovered_tasks, bool):
+            raise ValueError("share_discovered_tasks must be boolean")
+        self.share_discovered_tasks = share_discovered_tasks
         self.vehicle_backend: VehicleBackend = (
             vehicle_backend if vehicle_backend is not None else PointMassBackend()
         )
@@ -231,6 +237,7 @@ class Simulation:
             for agent_id in sorted(selected_agent_ids)
         }
         self.observation_receipts: list[ObservationReceipt] = []
+        self.task_description_receipts: list[TaskDescriptionReceipt] = []
         if config.failure_agent_id not in selected_agent_ids:
             raise ValueError("failure_agent_id is not present in provided agents")
         if (
@@ -310,6 +317,9 @@ class Simulation:
         )
         self.observation_transport = ObservationTransport(
             self.communication_graph, self.observation_stores
+        )
+        self.task_description_transport = TaskDescriptionTransport(
+            self.communication_graph, self.task_discoveries
         )
         self.task_objectives = tuple(
             sorted(
@@ -397,6 +407,15 @@ class Simulation:
             self.task_discoveries[agent_id].discover(
                 self.observation_stores[agent_id], now=timestamp
             )
+        if self.share_discovered_tasks:
+            participants = self._participating_agent_ids()
+            for _ in range(len(participants)):
+                receipts = self.task_description_transport.exchange(
+                    now=timestamp, participants=participants
+                )
+                self.task_description_receipts.extend(receipts)
+                if not any(receipt.accepted for receipt in receipts):
+                    break
 
     def _maybe_amend_contract(self, timestamp: float) -> None:
         """Hand an amendment to one UAV and let it spread as ordinary evidence.
@@ -1486,6 +1505,7 @@ class Simulation:
             observation_stores=dict(self.observation_stores),
             task_discoveries=dict(self.task_discoveries),
             observation_receipts=tuple(self.observation_receipts),
+            task_description_receipts=tuple(self.task_description_receipts),
         )
         LOGGER.info("\n%s", result.metrics.format_summary())
         return result

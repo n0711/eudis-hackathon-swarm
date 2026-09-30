@@ -11,10 +11,12 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Sequence
 
+from .agent import Agent
 from .config import SimulationConfig
 from .observation_replay import parse_record
 from .observation_transport import ObservationPublication
 from .simulation import Simulation
+from .task import Task
 
 
 def load_publications(path: Path) -> tuple[ObservationPublication, ...]:
@@ -41,6 +43,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("jsonl", type=Path)
     parser.add_argument("--output", type=Path)
     parser.add_argument("--seed", type=int, default=2026)
+    parser.add_argument(
+        "--scenario", choices=("observation", "relay-recovery"), default="observation"
+    )
+    parser.add_argument("--no-task-sharing", action="store_true")
     args = parser.parse_args(argv)
     config = SimulationConfig(
         agent_count=3,
@@ -53,9 +59,29 @@ def main(argv: Sequence[str] | None = None) -> int:
         comm_fault_end=2.0,
         max_simulation_time=30.0,
     )
+    agents = None
+    tasks = None
+    if args.scenario == "relay-recovery":
+        config = SimulationConfig(
+            agent_count=3,
+            task_count=2,
+            random_seed=args.seed,
+            agent_speed=1.0,
+            communication_range=5.0,
+            failure_agent_id=1,
+            failure_time=1.0,
+            max_simulation_time=30.0,
+            completion_tolerance=0.0,
+            time_step=0.5,
+        )
+        agents = tuple(Agent(i, ((i - 1) * 4.0, 0.0), 1.0) for i in (1, 2, 3))
+        tasks = (Task(1, (0.0, 0.0)), Task(2, (4.0, 20.0)))
     try:
         result = Simulation(
             config,
+            agents=agents,
+            tasks=tasks,
+            share_discovered_tasks=not args.no_task_sharing,
             observation_publications=load_publications(args.jsonl),
             capture_trace=True,
         ).run()
@@ -67,6 +93,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     evidence = {
         "evidence_type": "synthetic_simulation",
         "config": config_evidence,
+        "scenario": args.scenario,
+        "share_discovered_tasks": not args.no_task_sharing,
         "mission_completed": result.metrics.mission_completed,
         "total_tasks": result.metrics.total_task_count,
         "completed_tasks": result.metrics.completed_task_count,
@@ -79,6 +107,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             asdict(receipt) for receipt in result.observation_receipts
         ],
     }
+    evidence["task_description_receipts"] = [
+        asdict(receipt) for receipt in result.task_description_receipts
+    ]
     content = json.dumps(evidence, indent=2, sort_keys=True) + "\n"
     if args.output is not None:
         args.output.parent.mkdir(parents=True, exist_ok=True)
