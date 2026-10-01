@@ -1,6 +1,6 @@
 # Overnight session log
 
-Session start: 2026-09-19, branch `claude/inventory`, HEAD `439280c` at start.
+Session start: 2026-09-19, the development branch, HEAD `439280c` at start.
 Operator instructions: maximum *safe, verifiable* progress; never push; never
 touch a remote; commit locally only, prefixed `overnight:`; never weaken an
 existing test; do not modify the coordination core beyond what a task strictly
@@ -9,14 +9,33 @@ requires.
 This file is updated as I go, not only at the end, so the state can be
 reconstructed if the session stops mid-task.
 
+## STATE FOUND (second session, resuming a first session that stopped mid-task)
+
+On start of this (second) session: the development branch, HEAD
+`aa88504` ("overnight: Phase 1 ground truth"). `git status` showed a modified
+`OVERNIGHT_LOG.md` (the Phase 2 plan and 2A build log below, already written)
+and six untracked files — `lease_timeout_study.py`, `lease_timeout_chart.py`,
+`control_mode_comparison.py` and their three test files — fully written, per
+the log, but with "full suite + coverage re-run pending... before the Phase
+2A commit" as the last line. So: Phase 0 and Phase 1 were already complete
+and committed; Phase 2A's code and tests were already written but the
+verification-before-commit step had not run, and nothing was committed. This
+is coherent, deliberate in-progress work, not a half-broken accident, so
+nothing was set aside or discarded. This session's first action was to run
+exactly the pending verification (full quality gate + test suite), confirm
+green, then commit Phase 2A — see "2A build log" below for the actual
+results and the corrected commit. No file was modified in a way that
+contradicts anything the first session wrote; this section documents the
+handoff, not a correction of it. Proceeding to consider Phase 2B next.
+
 ## Phase 1 — ground truth (no behavior changes)
 
 - Repo identity: package name `eudis-swarm`, working-tree directory and git
   remote are named `eudis-hackathon-swarm` (`https://github.com/n0711/eudis-hackathon-swarm.git`).
   `pyproject.toml`'s `[project.urls]` still point at `github.com/n0711/eudis-swarm`
   (the old name) — a stale-URL hygiene item, not fixed (see baseline doc).
-- Branch `claude/inventory`, HEAD `439280c557b4b358514e2b01ca1b50e9219d7417`.
-  `origin/main`, local `main`, and `claude/inventory` are all the same commit —
+- The development branch, HEAD `439280c557b4b358514e2b01ca1b50e9219d7417`.
+  `origin/main`, local `main`, and this branch are all the same commit —
   nothing local is unpushed.
 - EFSM work near commit `a9a7206` (`chore: remove automated dependency update
   metadata`) is an ancestor of HEAD, 30 commits behind. The actual EFSM commits
@@ -84,7 +103,7 @@ reconstructed if the session stops mid-task.
 | File | Why |
 | --- | --- |
 | `OVERNIGHT_LOG.md` (new) | this log |
-| `CLAUDE.md` (new) | `/init`-generated architecture/commands reference for future Claude Code sessions |
+| `AGENTS.md` (new) | `/init`-generated architecture/commands reference for future coding-agent sessions |
 | `PRE_HACKATHON_BASELINE.md` (new) | Phase 1 frozen ground-truth report: commit, gate results, capability map, hygiene decisions |
 | `.venv/` (tooling only, not committed — `.gitignore`d) | upgraded `pip` 22.0.2 → 26.2.1; installed `.[dev]` and standalone `plotly` with `--ignore-requires-python` (see baseline doc for why) |
 
@@ -286,8 +305,8 @@ reference only; none of its code is present in the branch anymore.
 
 ## SUMMARY (end of session)
 
-Final state (at the time this log entry was written): branch
-`claude/inventory`, HEAD `bcbf8b4` ("overnight: begin a VehicleBackend seam,
+Final state (at the time this log entry was written): the development
+branch, HEAD `bcbf8b4` ("overnight: begin a VehicleBackend seam,
 additive only"). Working tree clean except a pre-existing untracked local
 tool-config directory, which was already untracked before this session
 started and was not created or touched by me. Nothing was pushed; nothing

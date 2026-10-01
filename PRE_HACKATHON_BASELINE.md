@@ -6,7 +6,7 @@ either read directly from the repository or reproduced by running the exact
 command shown.
 
 - **Commit:** `439280c557b4b358514e2b01ca1b50e9219d7417`
-- **Branch:** `claude/inventory` (identical to local `main` and `origin/main`
+- **Branch:** the development branch (identical to local `main` and `origin/main`
   — nothing on this branch is unpushed)
 - **Repo identity:** package name is `eudis-swarm`; this working directory and
   its git remote are named `eudis-hackathon-swarm`
