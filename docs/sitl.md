@@ -314,7 +314,9 @@ hold, its work recovered by the others through lease expiry.
 | Shared frame | `sitl.py` | `SitlVehicle(origin=...)`: every vehicle reports in one mission frame, so one local metre is the same place for all of them and a task maps to one global point. Without `origin` a single vehicle still pins to its own first fix. |
 | Ground vehicles | `sitl.py`, `sitl_swarm.py` | `SitlVehicle.arm()` (GUIDED + arm, no takeoff; only the arm command's own ACK counts), `HOLD` as the rover's safe mode, per-class arrival tolerance. |
 | Evidence log | `live_mission.py` | `InstrumentedSimulation` observes a normal `Simulation` and writes JSON lines: header (config, vehicle types, safe modes, tolerances), one record per mission boundary (logical time; each agent's truth; each live vehicle's observed position, altitude, clock and drift; every receiver's ownership view of every task; events incl. `FAIL_STOP`), and a result record. On the point-mass backend it reproduces a plain `Simulation` exactly and its log is byte-identical between runs (tested). |
-| Report | `live_report.py`, `scripts/sitl_swarm_report.py` | Derives everything from the log alone: tasks, mission time, detection latency, orphaned tasks and recovery latency, concurrent ownership, minimum pairwise 3-D separation and steps below a threshold, per-vehicle drift, the observed hold (distance moved after the command, final speed). |
+| Report | `live_report.py`, `scripts/sitl_swarm_report.py` | Derives everything from the log alone: tasks, mission time, detection latency, orphaned tasks and recovery latency, concurrent ownership, minimum pairwise 3-D separation and steps below a threshold, per-vehicle drift, the observed hold (distance moved after the command, final speed). `--check` evaluates the LT3 test card's P1-P8 mechanically and exits non-zero unless every run passes; each log file is summarised on its own (`--combine` merges files). |
+| Chart | `live_chart.py`, `scripts/sitl_swarm_chart.py` | One offline HTML page per log (needs the `charts` extra): live tracks beside point-mass tracks on the same axes, tasks, the failure point and where the failed vehicle actually came to rest, observed altitude bands over time, minimum separation against the threshold, plus the comparison table and checklist as text. |
+| LT3 runner | `scripts/sitl-lt3.sh` | The whole test card in one command: for each run, fresh instances, fly, stop; then `--check` over every log; exit 0 only when every run passed. |
 | Launcher | `scripts/sitl-swarm.sh` | N instances (`-I i`, TCP `5760+10i`, sysid `i+1`), copters and/or rovers, each in its own directory, each starting at its agent's simulated start position about a shared origin; `stop`, `status`, `DRY_RUN=1`. |
 | Mission | `sitl_swarm.py`, `scripts/sitl_swarm_mission.py` | Connects N vehicles, checks each is at its simulated start, arms copters to layered altitudes and rovers on the ground, flies one distributed-control mission (all agents or `--live-agents`) with a scheduled physical failure and optional `--jammer`/`--comm-fault`, holds every vehicle if anything aborts, lands copters, writes the log, then flies the identical configuration on the point-mass backend and prints both side by side. |
 
@@ -401,6 +403,9 @@ care, and neither is a fault of the live run:
   different trajectories through the same protocol, not one result and its
   error bar.
 
+`scripts/sitl-lt3.sh 2 5` was itself run end to end in the same container
+(two fresh 4-copter runs, both meeting P1-P8, `LT3 PASS over 2 run(s)`, exit 0).
+
 The same mixed swarm was also flown at `--speedup 2` before the final commit
 (copter UAV 2 failed at 4 s: 8/8, 21.00 s, recovery 10.25 s, BRAKE confirmed,
 16.3 m to rest; min separation 14.4 m) with the same outcome.
@@ -461,9 +466,22 @@ python scripts/sitl_swarm_mission.py --count 4 --log lt3-run1.jsonl \
 # 3. stop every instance (fresh instances for every run)
 RUN_DIR=/tmp/lt3 scripts/sitl-swarm.sh stop
 
-# 4. later, anywhere: the comparison table from the log alone
-python scripts/sitl_swarm_report.py lt3-run1.jsonl
+# 4. later, anywhere: the comparison table and the test-card verdict
+python scripts/sitl_swarm_report.py --check lt3-run1.jsonl
+# 5. a picture of the run for the slides (pip install -e ".[charts]")
+python scripts/sitl_swarm_chart.py lt3-run1.jsonl      # writes lt3-run1.html
 ```
+
+Or the whole test card, three fresh runs and the verdict, in one command:
+
+```bash
+scripts/sitl-lt3.sh 3 5                       # results in lt3-<UTC time>/
+VEHICLES=copter,copter,copter,rover scripts/sitl-lt3.sh 3 5 -- \
+    --failure-agent 4 --failure-time 8        # the mixed-swarm variant
+```
+
+It ends with `LT3 PASS over 3 run(s)` (exit 0) or `LT3 FAIL ...` (exit 1),
+and leaves `runN.jsonl`, `runN.txt` and `report.txt` in the results folder.
 
 The launcher's `ORIGIN` and the mission's `--origin` must agree (both default
 to `35.1264,33.4299`); the mission aborts before arming if any vehicle is more
@@ -479,7 +497,8 @@ recovered by the others through lease expiry, deconfliction evidenced.
 **Prerequisites.** As "Lab run" above; `pytest` green on the commit under test
 (LT1); nothing else heavy running (the drift check depends on it).
 
-**Steps.**
+**Steps** (steps 2-5 are exactly what `scripts/sitl-lt3.sh 3 5` automates;
+use it unless you need to watch each stage).
 
 1. `git rev-parse HEAD` — record the commit. `git status` must be clean.
 2. Start fresh instances: `RUN_DIR=/tmp/lt3 scripts/sitl-swarm.sh 4 5`.
@@ -496,14 +515,19 @@ recovered by the others through lease expiry, deconfliction evidenced.
    (`scripts/sitl-swarm.sh copter copter copter rover 5` and
    `--vehicles copter,copter,copter,rover`); rover failure
    (`--failure-agent 4 --failure-time 8`); a partition (`--jammer 50,50,30,3,9`).
-7. Bundle the evidence:
+7. Verdict: `python scripts/sitl_swarm_report.py --check lt3-run*.jsonl`
+   prints a checklist per run and `LT3 verdict: PASS (3/3 runs passed)`.
+   Optional picture: `python scripts/sitl_swarm_chart.py lt3-run1.jsonl`.
+8. Bundle the evidence:
    `python scripts/collect_evidence.py LT3 --result PASS|FAIL --note "..." --attach lt3-run*.jsonl lt3-run*.txt`.
 
 **Record** for each run: the commit, ArduPilot version (first lines of
 `/tmp/lt3/inst0/sitl.log`), speedup, the full table, the drift table, the
 fail-stop cell, and the min-separation cell.
 
-**Pass criteria — every run must show all of:**
+**Pass criteria — every run must show all of** (`--check` evaluates exactly
+these; P8 there checks that the point-mass run completed, and the test suite
+pins its default figures):
 
 | # | Criterion | Where it shows |
 | --- | --- | --- |
@@ -535,6 +559,8 @@ Live numbers are non-deterministic and are not measured results.
   `MavlinkBackend` (e.g. `tests/test_field_node.py`) needs it.
 - The evidence-log schema is version 2 (vehicle types, safe modes,
   tolerances, altitude); `live_report` refuses a log of another version.
+  Headers written since also carry `task_positions` (additive; older logs
+  still chart, with tasks placed where they were completed).
 - Not done: free-running (non-lock-step) time; a calibrated motion model for
   the communication-only projection (still point-mass); real RF; hardware.
 - README, CHANGELOG and milestones are deliberately untouched by this work;

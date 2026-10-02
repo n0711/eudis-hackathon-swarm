@@ -571,3 +571,155 @@ def test_launcher_names_the_missing_rover_build(tmp_path: Path) -> None:
     )
     assert result.returncode == 1
     assert "ardurover is not built" in result.stderr and "./waf rover" in result.stderr
+
+
+def test_the_mission_prints_its_own_test_card_verdict(tmp_path: Path) -> None:
+    code, printed = _run(["--log", str(tmp_path / "e.jsonl")], _Factory())
+    assert code == 0
+    assert "this run: LT3 test card" in printed
+    assert "[x] P2 a physical failure, one fail-stop sent to that vehicle" in printed
+
+
+# --- the one-command LT3 runner ------------------------------------------------
+
+RUNNER = LAUNCHER.parent / "sitl-lt3.sh"
+RECORDED_LOG = (
+    Path(__file__).resolve().parents[1]
+    / "docs"
+    / "data"
+    / "sitl"
+    / "phase5"
+    / "c5.jsonl"
+)
+
+
+def _runner(*args: str, **env: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["bash", str(RUNNER), *args],
+        capture_output=True,
+        text=True,
+        env={**os.environ, **env},
+        check=False,
+    )
+
+
+def _stand_in_python(tmp_path: Path, mission_behaviour: str) -> Path:
+    """An interpreter that fakes the mission and runs the real report.
+
+    ``mission_behaviour`` is ``copy`` (write a recorded passing log) or
+    ``crash`` (exit 1 without writing any log), so the runner's bookkeeping
+    and verdict are tested without ArduPilot.
+    """
+
+    import sys
+
+    stub = tmp_path / "python"
+    stub.write_text(
+        "#!/usr/bin/env bash\n"
+        'if [[ "$1" == *sitl_swarm_mission.py ]]; then\n'
+        '  echo "mission args: $*"\n'
+        f'  if [[ "{mission_behaviour}" == crash ]]; then echo boom >&2; exit 1; fi\n'
+        "  while [[ $# -gt 0 ]]; do\n"
+        '    if [[ "$1" == --log ]]; then cp "' + str(RECORDED_LOG) + '" "$2"; fi\n'
+        "    shift\n"
+        "  done\n"
+        "  exit 0\n"
+        "fi\n"
+        f'exec "{sys.executable}" "$@"\n'
+    )
+    stub.chmod(0o755)
+    return stub
+
+
+def _fake_ardupilot(tmp_path: Path) -> Path:
+    ardupilot = tmp_path / "ardupilot"
+    for name in ("arducopter", "ardurover"):
+        binary = ardupilot / "build" / "sitl" / "bin" / name
+        binary.parent.mkdir(parents=True, exist_ok=True)
+        binary.write_text("#!/usr/bin/env bash\nexec sleep 30\n")
+        binary.chmod(0o755)
+    return ardupilot
+
+
+@needs_bash
+def test_runner_dry_run_plans_fresh_instances_per_run() -> None:
+    result = _runner(
+        "2",
+        "3",
+        "--",
+        "--failure-agent",
+        "4",
+        DRY_RUN="1",
+        VEHICLES="copter,copter,copter,rover",
+        OUT_DIR="out",
+    )
+    assert result.returncode == 0, result.stderr
+    assert "LT3: 2 run(s), 4 vehicle(s) (copter,copter,copter,rover), speedup 3" in (
+        result.stdout
+    )
+    assert "run1 sitl-swarm.sh 4 3" in result.stdout
+    assert "run2 sitl-swarm.sh 4 3" in result.stdout
+    assert (
+        "--count 4 --vehicles copter,copter,copter,rover --failure-agent 4 "
+        "--log out/run2.jsonl" in result.stdout
+    )
+    assert "sitl_swarm_report.py --check out/run*.jsonl" in result.stdout
+
+
+@needs_bash
+@pytest.mark.parametrize(
+    ("args", "env", "message"),
+    [
+        (("0",), {}, "RUNS must be a positive integer"),
+        (("x",), {}, "RUNS must be a positive integer"),
+        (("1", "0"), {}, "SPEEDUP must be a positive integer"),
+        (("1",), {"COUNT": "zero"}, "COUNT must be a positive integer"),
+        (("1", "2", "3"), {}, "Run the LT3 test card"),
+    ],
+)
+def test_runner_refuses_bad_arguments(
+    args: tuple[str, ...], env: dict[str, str], message: str
+) -> None:
+    result = _runner(*args, DRY_RUN="1", **env)
+    assert result.returncode == 2
+    assert message in result.stderr
+
+
+@needs_bash
+def test_runner_passes_when_every_run_meets_the_card(tmp_path: Path) -> None:
+    out = tmp_path / "out"
+    result = _runner(
+        "2",
+        "4",
+        PYTHON=str(_stand_in_python(tmp_path, "copy")),
+        ARDUPILOT_DIR=str(_fake_ardupilot(tmp_path)),
+        RUN_DIR=str(tmp_path / "sitl"),
+        OUT_DIR=str(out),
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "LT3 PASS over 2 run(s)" in result.stdout
+    assert sorted(p.name for p in out.glob("run?.jsonl")) == [
+        "run1.jsonl",
+        "run2.jsonl",
+    ]
+    assert "LT3 verdict: PASS (2/2 runs passed)" in (out / "report.txt").read_text()
+    assert "--count 4 --log" in (out / "run1.txt").read_text()
+    # Every instance was stopped after its run.
+    for run in ("run1", "run2"):
+        assert not (tmp_path / "sitl" / run / "pids").exists()
+
+
+@needs_bash
+def test_runner_fails_a_run_that_wrote_no_evidence(tmp_path: Path) -> None:
+    out = tmp_path / "out"
+    result = _runner(
+        "1",
+        PYTHON=str(_stand_in_python(tmp_path, "crash")),
+        ARDUPILOT_DIR=str(_fake_ardupilot(tmp_path)),
+        RUN_DIR=str(tmp_path / "sitl"),
+        OUT_DIR=str(out),
+    )
+    assert result.returncode == 1
+    assert "run 1: FAIL, no evidence log (mission status 1)" in result.stdout
+    assert "LT3 FAIL" in result.stdout
+    assert not (tmp_path / "sitl" / "run1" / "pids").exists()

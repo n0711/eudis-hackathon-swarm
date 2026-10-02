@@ -32,8 +32,11 @@ from .config import SimulationConfig
 from .live_mission import Record, run_logged, write_jsonl
 from .live_report import (
     DEFAULT_SEPARATION_THRESHOLD_M,
+    check_test_card,
+    format_checklist,
     format_comparison,
     format_vehicle_table,
+    split_live_and_baseline,
     summarize,
 )
 from .mavlink_backend import SAFE_HOLD_MODES, MavlinkBackend, VehicleTelemetry
@@ -493,6 +496,10 @@ def run(
         if summary.vehicles:
             print(file=out)
             print(format_vehicle_table(summary), file=out)
+    live, baseline = split_live_and_baseline(summaries)
+    if live is not None:
+        print(file=out)
+        print(format_checklist("this run", check_test_card(live, baseline)), file=out)
     print(f"\nevidence log: {arguments.log}", file=out)
     return 0
 

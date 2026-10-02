@@ -195,6 +195,10 @@ class InstrumentedSimulation(Simulation):
                 for agent_id, tolerance in sorted(self._completion_tolerances.items())
             },
             "task_ids": [objective.task_id for objective in self.task_objectives],
+            "task_positions": {
+                str(objective.task_id): _point(objective.position)
+                for objective in self.task_objectives
+            },
             "agent_ids": [agent.agent_id for agent in self.mission.ordered_agents],
             "config": config_record(self.config),
         }

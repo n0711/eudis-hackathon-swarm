@@ -13,9 +13,12 @@ from eudis_swarm.config import SimulationConfig
 from eudis_swarm.live_mission import Record, run_logged, write_jsonl
 from eudis_swarm.live_report import (
     _separation,
+    check_test_card,
+    format_checklist,
     format_comparison,
     format_vehicle_table,
     main,
+    split_live_and_baseline,
     step_separation,
     summarize,
     summarize_run,
@@ -210,7 +213,7 @@ def test_the_command_line_report(tmp_path: Path, capsys) -> None:
     with baseline_path.open("w", encoding="utf-8") as stream:
         write_jsonl(point_mass, stream)
 
-    assert main([str(live_path), str(baseline_path)]) == 0
+    assert main(["--combine", str(live_path), str(baseline_path)]) == 0
     printed = capsys.readouterr().out
     assert "| Tasks completed | 8/8 | 8/8 |" in printed
     assert "sitl: lock-step per vehicle" in printed
@@ -334,3 +337,106 @@ def test_the_recorded_phase5_flights_still_meet_the_test_card(run: str) -> None:
     assert live.steps_below_separation == 0  # P6
     assert max(v.max_drift_s for v in live.vehicles) < 1.0  # P7
     assert baseline.completed_task_count == 8  # P8
+
+
+# --- the LT3 test-card checker -------------------------------------------------
+
+
+def _recorded(run: str) -> list[Record]:
+    from eudis_swarm.live_mission import read_jsonl
+
+    with (RECORDED / f"{run}.jsonl").open(encoding="utf-8") as stream:
+        return read_jsonl(stream)
+
+
+def test_a_recorded_flight_passes_every_criterion() -> None:
+    live, baseline = split_live_and_baseline(summarize(_recorded("c5")))
+    assert live is not None and baseline is not None
+    results = check_test_card(live, baseline)
+    assert [r.criterion for r in results] == [f"P{n}" for n in range(1, 9)]
+    assert all(r.passed for r in results)
+    text = format_checklist("c5", results)
+    assert text.startswith("c5: LT3 test card PASS")
+    assert "[x] P3 the held vehicle actually stopped: final speed 0.00 m/s" in text
+
+
+def _failed(results) -> list[str]:  # type: ignore[no-untyped-def]
+    return [r.criterion for r in results if not r.passed]
+
+
+def test_each_criterion_can_fail_on_its_own() -> None:
+    live, baseline = split_live_and_baseline(summarize(_recorded("c5")))
+    assert live is not None and baseline is not None
+
+    def check(**changes: object) -> list[str]:
+        return _failed(check_test_card(replace(live, **changes), baseline))  # type: ignore[arg-type]
+
+    stop = live.fail_stops[0]
+    assert check(mission_completed=False) == ["P1"]
+    assert check(completed_task_count=7) == ["P1"]
+    assert check(fail_stops=(replace(stop, confirmed=False),)) == ["P2"]
+    assert check(fail_stops=(replace(stop, agent_id=3),)) == ["P2"]
+    assert check(fail_stops=(stop, stop)) == ["P2", "P3"]
+    assert check(fail_stops=()) == ["P2", "P3"]
+    assert check(fail_stops=(replace(stop, residual_speed_mps=2.0),)) == ["P3"]
+    assert check(fail_stops=(replace(stop, residual_speed_mps=None),)) == ["P3"]
+    assert check(recovered=False) == ["P4"]
+    assert check(concurrent_ownership_task_s=0.25) == ["P5"]
+    assert check(steps_below_separation=3) == ["P6"]
+    assert check(min_separation_m=None) == ["P6"]
+    slow = replace(live.vehicles[0], max_drift_s=1.5)
+    assert check(vehicles=(slow, *live.vehicles[1:])) == ["P7"]
+    assert check(vehicles=()) == ["P7"]
+    assert check(failed_agent_id=None, fail_stops=()) == ["P2", "P3", "P4"]
+    assert _failed(check_test_card(live, None)) == ["P8"]
+    assert _failed(
+        check_test_card(live, replace(baseline, mission_completed=False))
+    ) == ["P8"]
+    assert format_checklist("x", check_test_card(live, None)).startswith(
+        "x: LT3 test card FAIL"
+    )
+
+
+def test_a_run_whose_failure_orphaned_nothing_still_recovers() -> None:
+    live, baseline = split_live_and_baseline(summarize(_recorded("c5")))
+    assert live is not None
+    results = check_test_card(
+        replace(live, orphaned_task_ids=(), recovered=False), baseline
+    )
+    assert _failed(results) == []
+
+
+def test_the_report_summarises_each_file_on_its_own_and_checks_them(
+    tmp_path: Path, capsys
+) -> None:
+    """Two mission logs each hold a 'sitl' and a 'point-mass' run."""
+
+    paths = [str(RECORDED / "c5.jsonl"), str(RECORDED / "mix5.jsonl")]
+    assert main(paths) == 0
+    printed = capsys.readouterr().out
+    assert f"## {paths[0]}" in printed and f"## {paths[1]}" in printed
+    assert "LT3 verdict" not in printed
+
+    assert main(["--check", *paths]) == 0
+    assert "LT3 verdict: PASS (2/2 runs passed)" in capsys.readouterr().out
+
+    # A log with a live run that breaks the card fails the verdict.
+    records = _recorded("c5")
+    for record in records:
+        if record["type"] == "result" and record["run"] == "sitl":
+            record["concurrent_ownership_task_s"] = 1.0
+    bad = tmp_path / "bad.jsonl"
+    with bad.open("w", encoding="utf-8") as stream:
+        write_jsonl(records, stream)
+    assert main(["--check", paths[0], str(bad)]) == 1
+    printed = capsys.readouterr().out
+    assert "[ ] P5 no concurrent ownership: 1.00 task-s" in printed
+    assert "LT3 verdict: FAIL (1/2 runs passed)" in printed
+
+    # A deterministic-only log has nothing to check: that is a failure too.
+    _result, point_mass = run_logged(_config(), run_label="point-mass")
+    alone = tmp_path / "pm.jsonl"
+    with alone.open("w", encoding="utf-8") as stream:
+        write_jsonl(point_mass, stream)
+    assert main(["--check", str(alone)]) == 1
+    assert "no live run in this log" in capsys.readouterr().out

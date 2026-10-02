@@ -511,32 +511,211 @@ def format_vehicle_table(summary: RunSummary) -> str:
     return "\n".join(lines)
 
 
+#: LT3 test-card limits (docs/sitl.md). A held vehicle slower than this at
+#: the end of the log has stopped; a drift above this means the machine could
+#: not sustain the requested --speedup.
+CARD_MAX_FINAL_SPEED_MPS = 0.5
+CARD_MAX_DRIFT_S = 1.0
+
+
+@dataclass(frozen=True, slots=True)
+class CriterionResult:
+    criterion: str
+    description: str
+    passed: bool
+    detail: str
+
+
+def check_test_card(
+    live: RunSummary,
+    baseline: RunSummary | None,
+    *,
+    max_final_speed_mps: float = CARD_MAX_FINAL_SPEED_MPS,
+    max_drift_s: float = CARD_MAX_DRIFT_S,
+) -> list[CriterionResult]:
+    """Evaluate one live run against the LT3 pass criteria P1-P8.
+
+    Mechanical on purpose: the verdict a reviewer reads should not depend on
+    who read the table. P8 checks only that the deterministic run completed;
+    its exact default-configuration figures are pinned by the test suite.
+    """
+
+    results: list[CriterionResult] = []
+
+    def add(criterion: str, description: str, passed: bool, detail: str) -> None:
+        results.append(CriterionResult(criterion, description, passed, detail))
+
+    add(
+        "P1",
+        "every task completed and the mission completed",
+        live.mission_completed and live.completed_task_count == live.total_task_count,
+        f"{live.completed_task_count}/{live.total_task_count}, "
+        f"completed={'yes' if live.mission_completed else 'no'}",
+    )
+    failed = live.failed_agent_id
+    stops = live.fail_stops
+    add(
+        "P2",
+        "a physical failure, one fail-stop sent to that vehicle, confirmed",
+        failed is not None
+        and len(stops) == 1
+        and stops[0].agent_id == failed
+        and stops[0].confirmed,
+        "no physical failure in this run"
+        if failed is None
+        else f"{len(stops)} fail-stop(s): "
+        + ", ".join(
+            f"UAV {f.agent_id} {f.mode} {'confirmed' if f.confirmed else 'UNCONFIRMED'}"
+            for f in stops
+        ),
+    )
+    speed = stops[0].residual_speed_mps if len(stops) == 1 else None
+    add(
+        "P3",
+        "the held vehicle actually stopped",
+        speed is not None and speed < max_final_speed_mps,
+        "not observed after the hold"
+        if speed is None
+        else f"final speed {speed:.2f} m/s (limit {max_final_speed_mps:g})",
+    )
+    add(
+        "P4",
+        "its work was recovered by the survivors",
+        failed is not None and (live.recovered or not live.orphaned_task_ids),
+        _recovery_cell(live),
+    )
+    add(
+        "P5",
+        "no concurrent ownership",
+        live.concurrent_ownership_task_s == 0.0,
+        f"{live.concurrent_ownership_task_s:.2f} task-s",
+    )
+    add(
+        "P6",
+        "deconfliction held",
+        live.min_separation_m is not None and live.steps_below_separation == 0,
+        _separation_cell(live),
+    )
+    worst = max((v.max_drift_s for v in live.vehicles), default=None)
+    add(
+        "P7",
+        "lock-step stayed honest",
+        worst is not None and worst < max_drift_s,
+        "no live vehicles"
+        if worst is None
+        else f"max drift {worst:.3f} s (limit {max_drift_s:g})",
+    )
+    add(
+        "P8",
+        "the deterministic comparison completed",
+        baseline is not None
+        and baseline.deterministic
+        and baseline.mission_completed
+        and baseline.completed_task_count == baseline.total_task_count,
+        "no point-mass run in the log"
+        if baseline is None
+        else f"{baseline.completed_task_count}/{baseline.total_task_count} in "
+        f"{baseline.mission_time_s:.2f} s",
+    )
+    return results
+
+
+def format_checklist(label: str, results: Sequence[CriterionResult]) -> str:
+    verdict = "PASS" if all(result.passed for result in results) else "FAIL"
+    lines = [f"{label}: LT3 test card {verdict}"]
+    lines.extend(
+        f"  [{'x' if result.passed else ' '}] {result.criterion} "
+        f"{result.description}: {result.detail}"
+        for result in results
+    )
+    return "\n".join(lines)
+
+
+def split_live_and_baseline(
+    summaries: Sequence[RunSummary],
+) -> tuple[RunSummary | None, RunSummary | None]:
+    live = next((s for s in summaries if not s.deterministic), None)
+    baseline = next((s for s in summaries if s.deterministic), None)
+    return live, baseline
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="Summarise live_mission evidence logs into a comparison table."
     )
-    parser.add_argument("logs", nargs="+", help="JSON-lines evidence log(s)")
+    parser.add_argument(
+        "logs",
+        nargs="+",
+        help="JSON-lines evidence log(s); each file is summarised on its own",
+    )
     parser.add_argument(
         "--separation-threshold",
         type=float,
         default=DEFAULT_SEPARATION_THRESHOLD_M,
         help="3-D metres below which two vehicles count as too close (default 5)",
     )
+    parser.add_argument(
+        "--combine",
+        action="store_true",
+        help=(
+            "treat all files as one log (e.g. a live run and its point-mass "
+            "baseline saved separately); run labels must then be unique"
+        ),
+    )
+    parser.add_argument(
+        "--check",
+        action="store_true",
+        help=(
+            "evaluate every live run against the LT3 test card (P1-P8) and "
+            "exit 1 unless all pass"
+        ),
+    )
     arguments = parser.parse_args(argv)
-    records: list[Record] = []
+    groups: list[tuple[str, list[Record]]] = []
     for path in arguments.logs:
         with open(path, encoding="utf-8") as stream:
-            records.extend(read_jsonl(stream))
-    try:
-        summaries = summarize(
-            records, separation_threshold_m=arguments.separation_threshold
-        )
-        print(format_comparison(summaries))
-    except ValueError as error:
-        print(f"error: {error}", file=sys.stderr)
-        return 2
-    for summary in summaries:
-        if summary.vehicles:
+            records = read_jsonl(stream)
+        if arguments.combine and groups:
+            groups[0][1].extend(records)
+        else:
+            groups.append((path, records))
+    if arguments.combine:
+        groups = [(" + ".join(arguments.logs), groups[0][1])]
+    verdicts: list[bool] = []
+    for index, (path, records) in enumerate(groups):
+        try:
+            summaries = summarize(
+                records, separation_threshold_m=arguments.separation_threshold
+            )
+        except ValueError as error:
+            print(f"error: {path}: {error}", file=sys.stderr)
+            return 2
+        if index:
             print()
-            print(format_vehicle_table(summary))
+        if len(groups) > 1:
+            print(f"## {path}")
+            print()
+        print(format_comparison(summaries))
+        for summary in summaries:
+            if summary.vehicles:
+                print()
+                print(format_vehicle_table(summary))
+        if arguments.check:
+            live, baseline = split_live_and_baseline(summaries)
+            print()
+            if live is None:
+                print(f"{path}: LT3 test card FAIL (no live run in this log)")
+                verdicts.append(False)
+                continue
+            results = check_test_card(live, baseline)
+            print(format_checklist(path, results))
+            verdicts.append(all(result.passed for result in results))
+    if arguments.check:
+        passed = sum(verdicts)
+        print()
+        print(
+            f"LT3 verdict: {'PASS' if passed == len(verdicts) else 'FAIL'} "
+            f"({passed}/{len(verdicts)} runs passed)"
+        )
+        return 0 if passed == len(verdicts) else 1
     return 0

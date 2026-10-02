@@ -227,6 +227,7 @@ def test_the_simulator_never_reaches_the_live_harness() -> None:
     probe = (
         "import sys; import eudis_swarm.simulation, eudis_swarm.sweep;"
         "mods = ('eudis_swarm.live_mission', 'eudis_swarm.live_report',"
+        " 'eudis_swarm.live_chart', 'plotly',"
         " 'eudis_swarm.sitl_swarm', 'eudis_swarm.sitl', 'pymavlink');"
         "print(','.join(m for m in mods if m in sys.modules))"
     )
