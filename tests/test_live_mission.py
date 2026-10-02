@@ -247,3 +247,76 @@ def test_the_live_harness_never_imports_pymavlink_on_import() -> None:
         [sys.executable, "-c", probe], capture_output=True, text=True, check=True
     )
     assert result.stdout.strip() == ""
+
+
+def test_per_agent_tolerances_equal_to_the_global_one_change_nothing() -> None:
+    config = _config()
+    _plain, baseline = run_logged(config, run_label="point-mass")
+    _same, overridden = run_logged(
+        config,
+        run_label="point-mass",
+        completion_tolerances={agent: 2.0 for agent in (1, 2, 3, 4)},
+    )
+    strip = [r for r in overridden if r["type"] != "header"]
+    assert strip == [r for r in baseline if r["type"] != "header"]
+
+
+def test_a_tighter_rover_tolerance_is_honoured_and_logged() -> None:
+    config = _config(completion_tolerance=6.0)
+    loose, _records = run_logged(config, run_label="loose")
+    tight, records = run_logged(
+        config,
+        run_label="tight",
+        vehicle_types={1: "copter", 2: "copter", 3: "copter", 4: "rover"},
+        completion_tolerances={4: 0.5},
+    )
+    header = records[0]
+    assert header["vehicle_types"]["4"] == "rover"
+    assert header["completion_tolerances"] == {"4": 0.5}
+    assert tight.metrics.completed_task_count == loose.metrics.completed_task_count
+    # The rover has to drive closer, so it cannot finish earlier.
+    assert tight.metrics.simulation_duration >= loose.metrics.simulation_duration
+    rover_done = [
+        event.timestamp
+        for event in tight.mission.events
+        if event.kind.value == "TASK_COMPLETED" and event.agent_id == 4
+    ]
+    loose_rover_done = [
+        event.timestamp
+        for event in loose.mission.events
+        if event.kind.value == "TASK_COMPLETED" and event.agent_id == 4
+    ]
+    assert rover_done != loose_rover_done
+
+
+@pytest.mark.parametrize(
+    ("tolerances", "message"),
+    [({9: 1.0}, "unknown agent 9"), ({1: 0.0}, "must be positive")],
+)
+def test_bad_tolerances_are_refused(tolerances: dict[int, float], message: str) -> None:
+    with pytest.raises(ValueError, match=message):
+        run_logged(_config(), run_label="x", completion_tolerances=tolerances)
+
+
+def test_live_records_carry_altitude_for_stepped_and_held_vehicles() -> None:
+    config = _config()
+    vehicles = _fleet(config)
+    for index, vehicle in enumerate(vehicles.values()):
+        vehicle.altitude_m = 20.0 + 5.0 * index
+    backend = MavlinkBackend(dict(vehicles), step_timeout=5.0)
+    _result, records = run_logged(config, run_label="sitl", vehicle_backend=backend)
+
+    observed = [
+        (v["id"], v["held"], v["altitude_m"])
+        for step in records
+        if step["type"] == "step"
+        for v in step["vehicles"]
+    ]
+    assert {(agent, alt) for agent, _held, alt in observed} == {
+        (1, 20.0),
+        (2, 25.0),
+        (3, 30.0),
+        (4, 35.0),
+    }
+    assert any(held for _agent, held, _alt in observed)
+    assert records[0]["fail_stop_modes"] == {str(a): "BRAKE" for a in (1, 2, 3, 4)}

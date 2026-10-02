@@ -30,13 +30,32 @@ from .agent import Position
 from .communication import RegionJammer
 from .config import SimulationConfig
 from .live_mission import Record, run_logged, write_jsonl
-from .live_report import format_comparison, format_vehicle_table, summarize
+from .live_report import (
+    DEFAULT_SEPARATION_THRESHOLD_M,
+    format_comparison,
+    format_vehicle_table,
+    summarize,
+)
 from .mavlink_backend import SAFE_HOLD_MODES, MavlinkBackend, VehicleTelemetry
 from .simulation import build_scenario
 
 #: Where ``scripts/sitl-swarm.sh`` puts the simulator's (0, 0) by default.
 #: Both sides must agree on it, so it is named once here and once there.
 DEFAULT_ORIGIN = (35.1264, 33.4299)
+
+#: Vehicle classes this harness can fly, and how each one is handled.
+VEHICLE_TYPES = ("copter", "rover")
+
+#: Safe hold per class: a copter brakes and hovers, a rover stops in place.
+#: A copter's mode is the --fail-stop-mode choice; a rover always uses HOLD.
+ROVER_HOLD_MODE = "HOLD"
+
+#: Arrival tolerance per class, from measurement on ArduPilot SITL:
+#: ArduCopter settles 1.4-2.0 m from a GUIDED setpoint (docs/sitl.md phase 3),
+#: ArduRover 0.15-0.81 m (docs/data/sitl/rover_settle_2026-10-02.txt). The
+#: rover value is that measured maximum with about 2x margin.
+DEFAULT_COPTER_TOLERANCE_M = 2.0
+DEFAULT_ROVER_TOLERANCE_M = 1.5
 
 #: ArduPilot SITL serves instance ``i`` on TCP ``5760 + 10 * i``.
 DEFAULT_BASE_PORT = 5760
@@ -50,6 +69,8 @@ class FleetVehicle(VehicleTelemetry, Protocol):
     def altitude_m(self) -> float: ...
 
     def connect(self) -> None: ...
+
+    def arm(self) -> None: ...
 
     def arm_and_takeoff(self, altitude_m: float) -> None: ...
 
@@ -92,6 +113,16 @@ def _parse_ids(spec: str) -> tuple[int, ...]:
     if not ids or ids[0] < 1:
         raise argparse.ArgumentTypeError("agent ids must be positive integers")
     return ids
+
+
+def _parse_vehicle_types(spec: str) -> tuple[str, ...]:
+    kinds = tuple(part.strip().lower() for part in spec.split(",") if part.strip())
+    unknown = [kind for kind in kinds if kind not in VEHICLE_TYPES]
+    if not kinds or unknown:
+        raise argparse.ArgumentTypeError(
+            f"vehicle types must be a comma-separated list of {VEHICLE_TYPES}"
+        )
+    return kinds
 
 
 def _parse_jammer(spec: str) -> RegionJammer:
@@ -141,6 +172,16 @@ def build_parser() -> argparse.ArgumentParser:
         "--count", type=int, default=4, help="number of UAVs in the mission"
     )
     parser.add_argument(
+        "--vehicles",
+        type=_parse_vehicle_types,
+        default=("copter",),
+        help=(
+            "vehicle type per agent, agent 1 first: copter or rover, e.g. "
+            "copter,copter,copter,rover; one value applies to all (default copter). "
+            "Must match the launcher's VEHICLES"
+        ),
+    )
+    parser.add_argument(
         "--live-agents",
         type=_parse_ids,
         default=None,
@@ -158,15 +199,27 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--completion-tolerance",
         type=float,
-        default=2.0,
-        help="metres; a real copter settles 1-3 m from a setpoint (default 2.0)",
+        default=DEFAULT_COPTER_TOLERANCE_M,
+        help=(
+            "copter arrival tolerance in metres; a copter settles 1.4-2.0 m from "
+            "a setpoint (default 2.0)"
+        ),
+    )
+    parser.add_argument(
+        "--rover-tolerance",
+        type=float,
+        default=DEFAULT_ROVER_TOLERANCE_M,
+        help="rover arrival tolerance in metres; measured settle 0.15-0.81 m (default 1.5)",
     )
     parser.add_argument("--altitude", type=float, default=20.0)
     parser.add_argument(
         "--altitude-step",
         type=float,
         default=5.0,
-        help="extra metres per agent so vehicles never share an altitude",
+        help=(
+            "altitude layering: copter k (0-based, in agent order) cruises at "
+            "--altitude + k * this, so no two copters share an altitude (default 5)"
+        ),
     )
     parser.add_argument("--failure-agent", type=int, default=2)
     parser.add_argument("--failure-time", type=float, default=4.0)
@@ -177,7 +230,16 @@ def build_parser() -> argparse.ArgumentParser:
         "--fail-stop-mode",
         choices=[*SAFE_HOLD_MODES, "none"],
         default="BRAKE",
-        help="safe hold sent once to a physically failed vehicle (default BRAKE)",
+        help=(
+            "safe hold sent once to a physically failed copter (default BRAKE); "
+            "a rover always gets HOLD; none disables the fail-stop"
+        ),
+    )
+    parser.add_argument(
+        "--separation-threshold",
+        type=float,
+        default=DEFAULT_SEPARATION_THRESHOLD_M,
+        help="3-D metres below which two live vehicles count as too close (default 5)",
     )
     parser.add_argument("--jammer", type=_parse_jammer, default=None)
     parser.add_argument("--comm-fault", type=_parse_comm_fault, default=None)
@@ -254,6 +316,43 @@ def connection_strings(
     }
 
 
+def vehicle_types(arguments: argparse.Namespace, count: int) -> dict[int, str]:
+    kinds = arguments.vehicles
+    if len(kinds) == 1:
+        kinds = kinds * count
+    if len(kinds) != count:
+        raise ValueError(
+            f"--vehicles lists {len(kinds)} types for a {count}-UAV mission"
+        )
+    return {index + 1: kind for index, kind in enumerate(kinds)}
+
+
+def completion_tolerances(
+    arguments: argparse.Namespace, kinds: dict[int, str]
+) -> dict[int, float]:
+    """Per-agent overrides: rovers only; copters use the configured tolerance."""
+
+    if arguments.rover_tolerance <= 0.0:
+        raise ValueError("--rover-tolerance must be positive")
+    return {
+        agent_id: arguments.rover_tolerance
+        for agent_id, kind in kinds.items()
+        if kind == "rover"
+    }
+
+
+def cruise_altitudes(
+    arguments: argparse.Namespace, kinds: dict[int, str], live_agents: Sequence[int]
+) -> dict[int, float]:
+    """Altitude layering: each live copter gets its own band; rovers none."""
+
+    copters = [agent_id for agent_id in live_agents if kinds[agent_id] == "copter"]
+    return {
+        agent_id: arguments.altitude + arguments.altitude_step * index
+        for index, agent_id in enumerate(copters)
+    }
+
+
 def start_positions(config: SimulationConfig) -> dict[int, Position]:
     agents, _tasks = build_scenario(config)
     return {agent.agent_id: agent.position for agent in agents}
@@ -263,8 +362,11 @@ def _distance(a: Position, b: Position) -> float:
     return ((a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2) ** 0.5
 
 
-def _hold_all(fleet: dict[int, FleetVehicle], out: TextIO, mode: str = "BRAKE") -> None:
+def _hold_all(
+    fleet: dict[int, FleetVehicle], kinds: dict[int, str], out: TextIO
+) -> None:
     for agent_id in sorted(fleet):
+        mode = ROVER_HOLD_MODE if kinds[agent_id] == "rover" else "BRAKE"
         try:
             confirmed = fleet[agent_id].hold(mode)
         except Exception as error:  # noqa: BLE001 - best effort on the abort path
@@ -295,6 +397,12 @@ def run(
         )
     connections = connection_strings(arguments, live_agents)
     starts = start_positions(config)
+    kinds = vehicle_types(arguments, config.agent_count)
+    tolerances = completion_tolerances(arguments, kinds)
+    altitudes = cruise_altitudes(arguments, kinds, live_agents)
+    copter_mode = (
+        None if arguments.fail_stop_mode == "none" else arguments.fail_stop_mode
+    )
 
     fleet: dict[int, FleetVehicle] = {}
     try:
@@ -316,8 +424,13 @@ def run(
                     f"{starts[agent_id][1]:.1f} ({offset:.1f} m off). Start SITL "
                     "with scripts/sitl-swarm.sh and the same --origin/ORIGIN."
                 )
-        for index, agent_id in enumerate(live_agents):
-            altitude = arguments.altitude + arguments.altitude_step * index
+        for agent_id in live_agents:
+            if kinds[agent_id] == "rover":
+                print(f"UGV {agent_id} (rover): arming in GUIDED ...", file=out)
+                fleet[agent_id].arm()
+                print(f"UGV {agent_id}: armed on the ground", file=out)
+                continue
+            altitude = altitudes[agent_id]
             print(f"UAV {agent_id}: arming, takeoff to {altitude:.0f} m ...", file=out)
             fleet[agent_id].arm_and_takeoff(altitude)
             print(
@@ -328,32 +441,52 @@ def run(
         backend = MavlinkBackend(
             dict(fleet),
             step_timeout=arguments.step_timeout,
-            fail_stop_mode=(
-                None if arguments.fail_stop_mode == "none" else arguments.fail_stop_mode
-            ),
+            fail_stop_mode=copter_mode,
+            fail_stop_modes={
+                agent_id: ROVER_HOLD_MODE
+                for agent_id in fleet
+                if kinds[agent_id] == "rover"
+            },
         )
         print("starting the live mission (NON-deterministic)", file=out)
         try:
             _live_result, live_records = run_logged(
-                config, run_label="sitl", vehicle_backend=backend
+                config,
+                run_label="sitl",
+                vehicle_backend=backend,
+                vehicle_types=kinds,
+                completion_tolerances=tolerances,
             )
         except BaseException:
-            print("mission aborted: putting every vehicle into BRAKE", file=out)
-            _hold_all(fleet, out)
+            print(
+                "mission aborted: putting every vehicle into a safe hold "
+                "(BRAKE for copters, HOLD for rovers)",
+                file=out,
+            )
+            _hold_all(fleet, kinds, out)
             raise
         if not arguments.no_land:
             for agent_id in sorted(fleet):
-                fleet[agent_id].set_mode("LAND")
+                fleet[agent_id].set_mode(
+                    ROVER_HOLD_MODE if kinds[agent_id] == "rover" else "LAND"
+                )
     finally:
         for vehicle in fleet.values():
             vehicle.close()
 
-    _pm_result, point_mass_records = run_logged(config, run_label="point-mass")
+    _pm_result, point_mass_records = run_logged(
+        config,
+        run_label="point-mass",
+        vehicle_types=kinds,
+        completion_tolerances=tolerances,
+    )
     records: list[Record] = [*live_records, *point_mass_records]
     with open(arguments.log, "w", encoding="utf-8") as stream:
         write_jsonl(records, stream)
 
-    summaries = summarize(records)
+    summaries = summarize(
+        records, separation_threshold_m=arguments.separation_threshold
+    )
     print(file=out)
     print(format_comparison(summaries), file=out)
     for summary in summaries:

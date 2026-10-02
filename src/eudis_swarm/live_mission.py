@@ -35,7 +35,7 @@ from .vehicle_backend import VehicleBackend
 
 #: Bumped whenever a record's shape changes, so the report can refuse a log it
 #: would misread.
-LOG_SCHEMA_VERSION = 1
+LOG_SCHEMA_VERSION = 2
 
 Record = dict[str, Any]
 RecordSink = Callable[[Record], None]
@@ -95,8 +95,17 @@ class InstrumentedSimulation(Simulation):
         sink: RecordSink,
         run_label: str,
         vehicle_backend: VehicleBackend | None = None,
+        vehicle_types: Mapping[int, str] | None = None,
+        completion_tolerances: Mapping[int, float] | None = None,
     ) -> None:
         super().__init__(config, vehicle_backend=vehicle_backend)
+        self._vehicle_types = dict(vehicle_types or {})
+        self._completion_tolerances = dict(completion_tolerances or {})
+        for agent_id, tolerance in self._completion_tolerances.items():
+            if agent_id not in self.mission.agents:
+                raise ValueError(f"completion tolerance for unknown agent {agent_id}")
+            if not tolerance > 0.0:
+                raise ValueError("completion tolerances must be positive")
         self._sink = sink
         self._run_label = run_label
         self._live = (
@@ -123,6 +132,32 @@ class InstrumentedSimulation(Simulation):
             self._live.apply_physical_faults(self.mission.ordered_agents, timestamp)
         return super()._update_communication_graph(timestamp, positions)
 
+    def _complete_arrivals(self, timestamp: float) -> int:
+        """The simulator's arrival rule, with an optional per-agent tolerance.
+
+        A copter settles 1-3 m from a setpoint and a rover well under one, so
+        one tolerance cannot fit a mixed swarm. Without overrides this defers
+        to ``Simulation._complete_arrivals`` unchanged; with them, the only
+        difference is which distance counts as "arrived". Both backends of a
+        comparison run with the same overrides.
+        """
+
+        if not self._completion_tolerances:
+            return super()._complete_arrivals(timestamp)
+        completed = 0
+        for agent in self.mission.ordered_agents:
+            task_id = self._executable_task_id(agent, timestamp)
+            if task_id is None:
+                continue
+            objective = self._task_objectives_by_id[task_id]
+            tolerance = self._completion_tolerances.get(
+                agent.agent_id, self.config.completion_tolerance
+            )
+            if agent.distance_to(objective.position) <= tolerance:
+                self.mission.complete_task(agent.agent_id, task_id, timestamp)
+                completed += 1
+        return completed
+
     def _observe_ownership(self, timestamp: float) -> None:
         super()._observe_ownership(timestamp)
         self._sink(self._step_record(timestamp))
@@ -143,6 +178,22 @@ class InstrumentedSimulation(Simulation):
             "deterministic": live is None,
             "integrated_agent_ids": [] if live is None else list(live.agent_ids),
             "fail_stop_mode": None if live is None else live.fail_stop_mode,
+            "fail_stop_modes": (
+                {}
+                if live is None
+                else {
+                    str(agent_id): live.fail_stop_mode_for(agent_id)
+                    for agent_id in live.agent_ids
+                }
+            ),
+            "vehicle_types": {
+                str(agent_id): kind
+                for agent_id, kind in sorted(self._vehicle_types.items())
+            },
+            "completion_tolerances": {
+                str(agent_id): tolerance
+                for agent_id, tolerance in sorted(self._completion_tolerances.items())
+            },
             "task_ids": [objective.task_id for objective in self.task_objectives],
             "agent_ids": [agent.agent_id for agent in self.mission.ordered_agents],
             "config": config_record(self.config),
@@ -210,6 +261,7 @@ class InstrumentedSimulation(Simulation):
                         "target_vehicle_time_s": sample.target_vehicle_time_s,
                         "drift_s": sample.drift_s,
                         "waited_wall_s": sample.waited_wall_s,
+                        "altitude_m": sample.altitude_m,
                     }
                 )
             for agent in self.mission.ordered_agents:
@@ -226,6 +278,7 @@ class InstrumentedSimulation(Simulation):
                         "target_vehicle_time_s": None,
                         "drift_s": None,
                         "waited_wall_s": None,
+                        "altitude_m": live.altitude_of(agent.agent_id),
                     }
                 )
         return {
@@ -268,6 +321,8 @@ def run_logged(
     *,
     run_label: str,
     vehicle_backend: VehicleBackend | None = None,
+    vehicle_types: Mapping[int, str] | None = None,
+    completion_tolerances: Mapping[int, float] | None = None,
 ) -> tuple[SimulationResult, list[Record]]:
     """Run one instrumented mission and return its result and every record."""
 
@@ -277,6 +332,8 @@ def run_logged(
         sink=records.append,
         run_label=run_label,
         vehicle_backend=vehicle_backend,
+        vehicle_types=vehicle_types,
+        completion_tolerances=completion_tolerances,
     )
     return simulation.run(), records
 

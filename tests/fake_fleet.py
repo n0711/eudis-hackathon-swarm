@@ -59,6 +59,7 @@ class FakeAutopilot:
         self.connected = False
         self.closed = False
         self.armed_to: float | None = None
+        self.armed_on_ground = False
 
     # --- the clock and the physics -------------------------------------
     def _clock(self) -> float:
@@ -95,7 +96,7 @@ class FakeAutopilot:
 
     def command_toward(self, target: Position) -> None:
         self._integrate()
-        if self.mode in ("BRAKE", "LOITER"):
+        if self.mode in ("BRAKE", "LOITER", "HOLD"):
             return  # a held autopilot ignores guided setpoints
         self._target = target
         self.commands.append(target)
@@ -118,6 +119,14 @@ class FakeAutopilot:
     # --- FleetVehicle -----------------------------------------------------
     def connect(self) -> None:
         self.connected = True
+        self._report()
+
+    def arm(self) -> None:
+        """A ground vehicle's start: GUIDED and armed, altitude unchanged."""
+
+        self.armed_on_ground = True
+        self.mode = "GUIDED"
+        self.world.advance(0.5)
         self._report()
 
     def arm_and_takeoff(self, altitude_m: float) -> None:

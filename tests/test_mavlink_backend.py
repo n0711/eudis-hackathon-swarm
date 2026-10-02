@@ -486,3 +486,55 @@ def test_unmapped_agents_are_ignored_by_the_live_hooks() -> None:
 def test_only_a_safe_hold_mode_is_accepted(mode: str) -> None:
     with pytest.raises(ValueError, match="fail_stop_mode"):
         MavlinkBackend({1: _FakeVehicle()}, fail_stop_mode=mode)
+
+
+def test_a_rover_in_a_copter_swarm_gets_its_own_safe_mode() -> None:
+    _world, vehicles, agents = _fleet()
+    backend = MavlinkBackend(dict(vehicles), fail_stop_modes={3: "HOLD"})
+    _step_all(backend, agents, 2)
+    agents[1].inject_failure(0.5)
+    agents[2].inject_failure(0.5)
+
+    backend.apply_physical_faults(agents, 0.5)
+
+    assert vehicles[2].holds == ["BRAKE"] and vehicles[3].holds == ["HOLD"]
+    assert [event.mode for event in backend.fail_stops] == ["BRAKE", "HOLD"]
+    assert backend.fail_stop_mode_for(1) == "BRAKE"
+    assert backend.fail_stop_mode_for(3) == "HOLD"
+
+
+def test_disabling_the_fail_stop_overrides_per_vehicle_modes() -> None:
+    _world, vehicles, agents = _fleet()
+    backend = MavlinkBackend(
+        dict(vehicles), fail_stop_mode=None, fail_stop_modes={3: "HOLD"}
+    )
+    agents[2].inject_failure(0.0)
+    backend.apply_physical_faults(agents, 0.0)
+    assert vehicles[3].holds == [] and backend.fail_stop_mode_for(3) is None
+
+
+@pytest.mark.parametrize(
+    ("modes", "message"),
+    [({9: "HOLD"}, "names agent 9"), ({1: "LAND"}, r"fail_stop_modes\[1\]")],
+)
+def test_per_vehicle_modes_are_validated(modes: dict[int, str], message: str) -> None:
+    with pytest.raises(ValueError, match=message):
+        MavlinkBackend({1: _FakeVehicle()}, fail_stop_modes=modes)
+
+
+def test_samples_carry_the_observed_altitude_when_reported() -> None:
+    _world, vehicles, agents = _fleet()
+    vehicles[1].altitude_m = 20.0
+    vehicles[2].altitude_m = 25.0
+    backend = MavlinkBackend(dict(vehicles))
+    _step_all(backend, agents, 1)
+
+    altitudes = {s.agent_id: s.altitude_m for s in backend.drain_samples()}
+    assert altitudes == {1: 20.0, 2: 25.0, 3: 0.0}
+    assert backend.altitude_of(2) == 25.0 and backend.altitude_of(7) is None
+    # A telemetry source with no altitude at all is reported as unknown.
+    plain = MavlinkBackend({1: _FakeVehicle()})
+    plain.move_toward(
+        Agent(agent_id=1, position=(0.0, 0.0), speed=10.0), (1.0, 0.0), 0.1
+    )
+    assert plain.samples[0].altitude_m is None

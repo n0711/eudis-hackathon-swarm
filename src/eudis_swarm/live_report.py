@@ -22,6 +22,9 @@ from typing import Any
 
 from .live_mission import LOG_SCHEMA_VERSION, Record, read_jsonl
 
+#: Default 3-D distance below which two live vehicles count as too close.
+DEFAULT_SEPARATION_THRESHOLD_M = 5.0
+
 #: Ownership states in which a receiver counts a task as handled.
 _HANDLED_STATES = ("OWNED_BY_SELF", "COMPLETE")
 
@@ -74,6 +77,18 @@ class RunSummary:
     recovered: bool
     vehicles: tuple[VehicleStats, ...] = field(default=())
     fail_stops: tuple[FailStopSummary, ...] = field(default=())
+    #: Agent id -> "copter" / "rover", from the header (empty for point-mass).
+    vehicle_types: tuple[tuple[int, str], ...] = field(default=())
+    #: Smallest pairwise 3-D distance between live vehicles over the mission,
+    #: from observed east/north/altitude. ``None`` without two such vehicles.
+    min_separation_m: float | None = None
+    #: Which pair, and when, that minimum occurred.
+    min_separation_pair: tuple[int, int] | None = None
+    min_separation_t: float | None = None
+    #: Steps whose minimum pairwise separation was below the threshold.
+    separation_threshold_m: float = DEFAULT_SEPARATION_THRESHOLD_M
+    steps_below_separation: int = 0
+    separation_steps: int = 0
 
 
 def _group(records: Sequence[Record]) -> dict[str, list[Record]]:
@@ -168,6 +183,52 @@ def _vehicle_stats(steps: Sequence[Record]) -> tuple[VehicleStats, ...]:
     return tuple(stats)
 
 
+def step_separation(step: Record) -> tuple[float, tuple[int, int]] | None:
+    """Minimum pairwise 3-D distance between the vehicles observed in a step.
+
+    A vehicle may appear twice in the step at which it is fail-stopped (its
+    last lock-step sample and its first held observation); the later record
+    wins. Vehicles without an observed altitude are left out.
+    """
+
+    latest: dict[int, tuple[float, float, float]] = {}
+    for vehicle in step["vehicles"]:
+        altitude = vehicle.get("altitude_m")
+        if altitude is None:
+            continue
+        east, north = vehicle["position"]
+        latest[int(vehicle["id"])] = (float(east), float(north), float(altitude))
+    ids = sorted(latest)
+    best: tuple[float, tuple[int, int]] | None = None
+    for index, first in enumerate(ids):
+        for second in ids[index + 1 :]:
+            distance = math.dist(latest[first], latest[second])
+            if best is None or distance < best[0]:
+                best = (distance, (first, second))
+    return best
+
+
+def _separation(
+    steps: Sequence[Record], threshold: float
+) -> tuple[float | None, tuple[int, int] | None, float | None, int, int]:
+    minimum: float | None = None
+    pair: tuple[int, int] | None = None
+    at: float | None = None
+    below = 0
+    counted = 0
+    for step in steps:
+        result = step_separation(step)
+        if result is None:
+            continue
+        counted += 1
+        distance, which = result
+        if distance < threshold:
+            below += 1
+        if minimum is None or distance < minimum:
+            minimum, pair, at = distance, which, float(step["t"])
+    return minimum, pair, at, below, counted
+
+
 def _fail_stops(steps: Sequence[Record]) -> tuple[FailStopSummary, ...]:
     summaries = []
     for step in steps:
@@ -220,7 +281,12 @@ def _fail_stops(steps: Sequence[Record]) -> tuple[FailStopSummary, ...]:
     return tuple(summaries)
 
 
-def summarize_run(run: str, records: Sequence[Record]) -> RunSummary:
+def summarize_run(
+    run: str,
+    records: Sequence[Record],
+    *,
+    separation_threshold_m: float = DEFAULT_SEPARATION_THRESHOLD_M,
+) -> RunSummary:
     header = _single(records, "header", run)
     if header.get("schema") != LOG_SCHEMA_VERSION:
         raise ValueError(
@@ -237,6 +303,7 @@ def summarize_run(run: str, records: Sequence[Record]) -> RunSummary:
     if failed_agent_id is not None and failure_time is not None:
         orphaned, recovery, recovered = _recovery(steps, failed_agent_id, failure_time)
         detection = result["failure_detection_latency_s"].get(str(failed_agent_id))
+    minimum, pair, at, below, counted = _separation(steps, separation_threshold_m)
     return RunSummary(
         run=run,
         backend=str(header["backend"]),
@@ -256,13 +323,51 @@ def summarize_run(run: str, records: Sequence[Record]) -> RunSummary:
         recovered=recovered,
         vehicles=_vehicle_stats(steps),
         fail_stops=_fail_stops(steps),
+        vehicle_types=tuple(
+            sorted(
+                (int(agent_id), str(kind))
+                for agent_id, kind in header.get("vehicle_types", {}).items()
+            )
+        ),
+        min_separation_m=minimum,
+        min_separation_pair=pair,
+        min_separation_t=at,
+        separation_threshold_m=separation_threshold_m,
+        steps_below_separation=below,
+        separation_steps=counted,
     )
 
 
-def summarize(records: Sequence[Record]) -> list[RunSummary]:
+def summarize(
+    records: Sequence[Record],
+    *,
+    separation_threshold_m: float = DEFAULT_SEPARATION_THRESHOLD_M,
+) -> list[RunSummary]:
     """One summary per run label, in the order the runs first appear."""
 
-    return [summarize_run(run, items) for run, items in _group(records).items()]
+    if not separation_threshold_m > 0.0:
+        raise ValueError("separation threshold must be positive")
+    return [
+        summarize_run(run, items, separation_threshold_m=separation_threshold_m)
+        for run, items in _group(records).items()
+    ]
+
+
+def _separation_cell(summary: RunSummary) -> str:
+    if summary.min_separation_m is None or summary.min_separation_pair is None:
+        return "n/a"
+    first, second = summary.min_separation_pair
+    return (
+        f"{summary.min_separation_m:.1f} m (UAV {first}-{second} at "
+        f"{summary.min_separation_t:.2f} s); {summary.steps_below_separation}/"
+        f"{summary.separation_steps} steps < {summary.separation_threshold_m:g} m"
+    )
+
+
+def _types_cell(summary: RunSummary) -> str:
+    if not summary.vehicle_types:
+        return "n/a"
+    return ", ".join(f"{agent}:{kind}" for agent, kind in summary.vehicle_types)
 
 
 def _seconds(value: float | None) -> str:
@@ -302,6 +407,7 @@ def format_comparison(summaries: Sequence[RunSummary]) -> str:
                 for summary in summaries
             ],
         ),
+        ("Vehicle types", [_types_cell(s) for s in summaries]),
         (
             "Tasks completed",
             [
@@ -339,6 +445,7 @@ def format_comparison(summaries: Sequence[RunSummary]) -> str:
             "Concurrent-ownership time",
             [f"{s.concurrent_ownership_task_s:.2f} task-s" for s in summaries],
         ),
+        ("Min 3-D separation (live)", [_separation_cell(s) for s in summaries]),
         (
             "Max lock-step drift (vehicle ahead)",
             [
@@ -409,13 +516,21 @@ def main(argv: Sequence[str] | None = None) -> int:
         description="Summarise live_mission evidence logs into a comparison table."
     )
     parser.add_argument("logs", nargs="+", help="JSON-lines evidence log(s)")
+    parser.add_argument(
+        "--separation-threshold",
+        type=float,
+        default=DEFAULT_SEPARATION_THRESHOLD_M,
+        help="3-D metres below which two vehicles count as too close (default 5)",
+    )
     arguments = parser.parse_args(argv)
     records: list[Record] = []
     for path in arguments.logs:
         with open(path, encoding="utf-8") as stream:
             records.extend(read_jsonl(stream))
     try:
-        summaries = summarize(records)
+        summaries = summarize(
+            records, separation_threshold_m=arguments.separation_threshold
+        )
         print(format_comparison(summaries))
     except ValueError as error:
         print(f"error: {error}", file=sys.stderr)

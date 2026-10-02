@@ -188,7 +188,7 @@ def test_a_stalled_vehicle_mid_mission_puts_every_vehicle_into_brake(
 
     assert code == 1
     assert "stale position" in capsys.readouterr().err
-    assert "mission aborted: putting every vehicle into BRAKE" in printed
+    assert "mission aborted: putting every vehicle into a safe hold" in printed
     assert all(v.holds[-1:] == ["BRAKE"] for v in factory.created.values())
     assert all(v.closed for v in factory.created.values())
 
@@ -399,7 +399,7 @@ def test_launcher_starts_tracks_and_stops_instances(tmp_path: Path) -> None:
     started = _launch("2", "4", **env)
     try:
         assert started.returncode == 0, started.stderr
-        assert "started instance 1 (agent 2) on TCP 5770" in started.stdout
+        assert "started instance 1 (agent 2, copter) on TCP 5770" in started.stdout
         status = _launch("status", **env)
         assert status.stdout.count("running") == 2
         again = _launch("2", **env)
@@ -411,3 +411,163 @@ def test_launcher_starts_tracks_and_stops_instances(tmp_path: Path) -> None:
     assert stopped.returncode == 0
     assert stopped.stdout.count("stopped instance") == 2
     assert not (run_dir / "pids").exists()
+
+
+# --- heterogeneous swarm: copters and a rover ------------------------------------
+
+
+def test_a_mixed_swarm_arms_the_rover_on_the_ground_and_layers_the_copters(
+    tmp_path: Path,
+) -> None:
+    factory = _Factory()
+    log = tmp_path / "mixed.jsonl"
+    code, printed = _run(
+        [
+            "--vehicles",
+            "copter,rover,copter,copter",
+            "--altitude",
+            "15",
+            "--altitude-step",
+            "4",
+            "--log",
+            str(log),
+        ],
+        factory,
+    )
+
+    assert code == 0
+    vehicles = [factory.created[key] for key in sorted(factory.created)]
+    # Copters climb to their own bands, skipping the rover's index.
+    assert [v.armed_to for v in vehicles] == [15.0, None, 19.0, 23.0]
+    assert vehicles[1].armed_on_ground and vehicles[1].altitude_m == 0.0
+    assert "UGV 2 (rover): arming in GUIDED" in printed
+    # Agent 2 is the rover and the scheduled failure: it gets HOLD, not BRAKE.
+    assert [v.holds for v in vehicles] == [[], ["HOLD"], [], []]
+    assert [v.modes for v in vehicles] == [["LAND"], ["HOLD"], ["LAND"], ["LAND"]]
+    assert "UAV 2 HOLD at 4.00 s (confirmed" in printed
+    assert "| Vehicle types | 1:copter, 2:rover, 3:copter, 4:copter |" in printed
+    assert "Min 3-D separation (live) | " in printed
+
+    records = [json.loads(line) for line in log.read_text().splitlines()]
+    headers = [r for r in records if r["type"] == "header"]
+    assert [h["completion_tolerances"] for h in headers] == [{"2": 1.5}, {"2": 1.5}]
+    assert headers[0]["fail_stop_modes"]["2"] == "HOLD"
+    assert headers[0]["fail_stop_modes"]["1"] == "BRAKE"
+
+
+def test_a_copter_failure_in_a_mixed_swarm_still_brakes(tmp_path: Path) -> None:
+    factory = _Factory()
+    code, _printed = _run(
+        [
+            "--vehicles",
+            "copter,copter,copter,rover",
+            "--failure-agent",
+            "3",
+            "--rover-tolerance",
+            "1.0",
+            "--log",
+            str(tmp_path / "e.jsonl"),
+        ],
+        factory,
+    )
+    assert code == 0
+    vehicles = [factory.created[key] for key in sorted(factory.created)]
+    assert [v.holds for v in vehicles] == [[], [], ["BRAKE"], []]
+
+
+def test_an_aborted_mixed_mission_holds_each_vehicle_in_its_own_safe_mode(
+    tmp_path: Path,
+) -> None:
+    factory = _Factory(stall=1)
+    code, printed = _run(
+        [
+            "--vehicles",
+            "copter,copter,copter,rover",
+            "--step-timeout",
+            "0.5",
+            "--log",
+            str(tmp_path / "e.jsonl"),
+        ],
+        factory,
+    )
+    assert code == 1
+    assert "BRAKE for copters, HOLD for rovers" in printed
+    vehicles = [factory.created[key] for key in sorted(factory.created)]
+    assert [v.holds[-1] for v in vehicles] == ["BRAKE", "BRAKE", "BRAKE", "HOLD"]
+
+
+@pytest.mark.parametrize(
+    ("argv", "message"),
+    [
+        (["--vehicles", "copter,rover"], "lists 2 types for a 4-UAV mission"),
+        (["--rover-tolerance", "0"], "--rover-tolerance must be positive"),
+    ],
+)
+def test_inconsistent_vehicle_arguments_fail_cleanly(
+    argv: list[str], message: str, tmp_path: Path, capsys
+) -> None:
+    code, _printed = _run([*argv, "--log", str(tmp_path / "e.jsonl")], _Factory())
+    assert code == 1
+    assert message in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("spec", ["boat", "copter,,", "copter,plane"])
+def test_unknown_vehicle_types_are_refused(spec: str) -> None:
+    if spec == "copter,,":
+        assert build_parser().parse_args(["--vehicles", spec]).vehicles == ("copter",)
+        return
+    with pytest.raises(SystemExit):
+        build_parser().parse_args(["--vehicles", spec])
+
+
+@needs_bash
+def test_launcher_accepts_vehicle_types_in_both_forms() -> None:
+    words = _launch("copter", "copter", "rover", "3", DRY_RUN="1")
+    assert words.returncode == 0, words.stderr
+    lines = [line for line in words.stdout.splitlines() if line.startswith("instance")]
+    assert [line.split()[-1] for line in lines] == ["copter", "copter", "rover"]
+    assert "ardurover --model rover --speedup 3 -I 2 --sysid 3" in words.stdout
+    assert "default_params/rover.parm" in words.stdout
+    assert "arducopter --model quad --speedup 3 -I 0" in words.stdout
+
+    env = _launch("2", DRY_RUN="1", VEHICLES="rover,copter")
+    assert env.returncode == 0, env.stderr
+    kinds = [
+        line.split()[-1]
+        for line in env.stdout.splitlines()
+        if line.startswith("instance")
+    ]
+    assert kinds == ["rover", "copter"]
+    broadcast = _launch("3", DRY_RUN="1", VEHICLES="rover")
+    assert broadcast.stdout.count("type rover") == 3
+
+
+@needs_bash
+@pytest.mark.parametrize(
+    ("args", "env", "message"),
+    [
+        (("2",), {"VEHICLES": "copter,boat"}, "must be copter or rover"),
+        (("3",), {"VEHICLES": "copter,rover"}, "2 vehicle types given for 3"),
+        (("copter", "rover", "5", "extra"), {}, "Start (or stop)"),
+    ],
+)
+def test_launcher_refuses_bad_vehicle_types(
+    args: tuple[str, ...], env: dict[str, str], message: str
+) -> None:
+    result = _launch(*args, DRY_RUN="1", **env)
+    assert result.returncode == 2
+    assert message in result.stderr
+
+
+@needs_bash
+def test_launcher_names_the_missing_rover_build(tmp_path: Path) -> None:
+    ardupilot = tmp_path / "ardupilot"
+    copter = ardupilot / "build" / "sitl" / "bin" / "arducopter"
+    copter.parent.mkdir(parents=True)
+    copter.write_text("#!/bin/sh\n")
+    copter.chmod(0o755)
+    result = _launch(
+        "copter", "rover", ARDUPILOT_DIR=str(ardupilot), RUN_DIR=str(tmp_path / "run")
+    )
+    assert result.returncode == 1
+    assert "ardurover is not built" in result.stderr and "./waf rover" in result.stderr

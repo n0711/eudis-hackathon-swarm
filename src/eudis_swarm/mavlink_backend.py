@@ -12,7 +12,7 @@ testable with a plain fake and carries no optional dependency of its own.
 from __future__ import annotations
 
 import time
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -20,15 +20,23 @@ from .agent import Agent, Position
 from .validation import validate_timestamp
 from .vehicle_backend import PointMassBackend
 
-#: ArduCopter flight modes that stop horizontal motion and hold position.
-#: BRAKE decelerates as hard as the vehicle allows and then holds; LOITER
-#: decelerates more gently and also holds. Both keep the aircraft in the air,
-#: which is the safe thing for a simulated "engine still running, controller
-#: gone" failure -- a motor cut or a disarm would drop it.
-SAFE_HOLD_MODES = ("BRAKE", "LOITER")
+#: Modes that stop horizontal motion and hold position. ArduCopter: BRAKE
+#: decelerates as hard as the vehicle allows and then holds; LOITER decelerates
+#: more gently and also holds. Both keep the aircraft in the air, which is the
+#: safe thing for a simulated "engine still running, controller gone" failure
+#: -- a motor cut or a disarm would drop it. ArduRover: HOLD stops a ground
+#: vehicle where it is.
+SAFE_HOLD_MODES = ("BRAKE", "LOITER", "HOLD")
 
 #: Wall-clock seconds between telemetry pumps while waiting on a vehicle clock.
 _POLL_SECONDS = 0.05
+
+
+def _altitude(vehicle: object) -> float | None:
+    """Observed altitude, read structurally: not every source reports one."""
+
+    altitude = getattr(vehicle, "altitude_m", None)
+    return float(altitude) if isinstance(altitude, (int, float)) else None
 
 
 class VehicleTelemetry(Protocol):
@@ -75,6 +83,9 @@ class LockStepSample:
     position: Position
     #: ``True`` when a setpoint was sent this step, ``False`` for a hover step.
     commanded: bool
+    #: Observed height above home, when the vehicle reports one. Feeds the
+    #: 3-D separation metric; ``None`` for a telemetry source without it.
+    altitude_m: float | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -142,6 +153,7 @@ class MavlinkBackend:
         *,
         step_timeout: float = 30.0,
         fail_stop_mode: str | None = "BRAKE",
+        fail_stop_modes: Mapping[int, str] | None = None,
     ) -> None:
         if not vehicles:
             raise ValueError("vehicles must name at least one agent")
@@ -152,9 +164,23 @@ class MavlinkBackend:
                 f"fail_stop_mode must be one of {SAFE_HOLD_MODES} or None, "
                 f"not {fail_stop_mode!r}"
             )
+        overrides = dict(fail_stop_modes or {})
+        for agent_id, mode in overrides.items():
+            if agent_id not in vehicles:
+                raise ValueError(
+                    f"fail_stop_modes names agent {agent_id}, not a vehicle"
+                )
+            if mode not in SAFE_HOLD_MODES:
+                raise ValueError(
+                    f"fail_stop_modes[{agent_id}] must be one of {SAFE_HOLD_MODES}, "
+                    f"not {mode!r}"
+                )
         self._vehicles = vehicles
         self._step_timeout = step_timeout
         self._fail_stop_mode = fail_stop_mode
+        # Per-vehicle safe modes (HOLD for a rover in a copter swarm). The
+        # default applies to every other vehicle; None disables the fail-stop.
+        self._fail_stop_modes = overrides
         self._point_mass = PointMassBackend()
         self._anchors: dict[int, _Anchor] = {}
         self._stepped_since_sync: set[int] = set()
@@ -170,6 +196,11 @@ class MavlinkBackend:
     @property
     def fail_stop_mode(self) -> str | None:
         return self._fail_stop_mode
+
+    def fail_stop_mode_for(self, agent_id: int) -> str | None:
+        if self._fail_stop_mode is None:
+            return None
+        return self._fail_stop_modes.get(agent_id, self._fail_stop_mode)
 
     @property
     def fail_stops(self) -> tuple[FailStopEvent, ...]:
@@ -238,23 +269,30 @@ class MavlinkBackend:
             vehicle = self._vehicles.get(agent.agent_id)
             if vehicle is None or agent.responsive or agent.agent_id in self._held:
                 continue
+            mode = self._fail_stop_modes.get(agent.agent_id, self._fail_stop_mode)
             # Marked before the command so a raising link can never cause a
             # second, duplicate hold on the next boundary.
             self._held.add(agent.agent_id)
             vehicle.observe(0.0)
             commanded_time = vehicle.vehicle_time_s
             commanded_position = vehicle.position
-            confirmed = vehicle.hold(self._fail_stop_mode)
+            confirmed = vehicle.hold(mode)
             self._fail_stops.append(
                 FailStopEvent(
                     agent_id=agent.agent_id,
                     logical_time=timestamp,
-                    mode=self._fail_stop_mode,
+                    mode=mode,
                     confirmed=confirmed,
                     vehicle_time_s=commanded_time,
                     position=commanded_position,
                 )
             )
+
+    def altitude_of(self, agent_id: int) -> float | None:
+        """The last observed altitude of a vehicle, if it reports one."""
+
+        vehicle = self._vehicles.get(agent_id)
+        return None if vehicle is None else _altitude(vehicle)
 
     def observe_held(self, agent_id: int) -> tuple[float, Position] | None:
         """Pump and return ``(vehicle_time_s, position)`` of a held vehicle.
@@ -336,5 +374,6 @@ class MavlinkBackend:
                 waited_wall_s=time.monotonic() - started,
                 position=agent.position,
                 commanded=commanded,
+                altitude_m=_altitude(vehicle),
             )
         )

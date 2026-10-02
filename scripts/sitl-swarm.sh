@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
-# Start (or stop) N ArduCopter SITL instances for the multi-vehicle mission.
+# Start (or stop) N ArduPilot SITL instances for the multi-vehicle mission.
 #
-#   scripts/sitl-swarm.sh N [SPEEDUP]   start N instances (default speedup 5)
-#   scripts/sitl-swarm.sh stop          stop every instance this script started
-#   scripts/sitl-swarm.sh status        list running instances
+#   scripts/sitl-swarm.sh N [SPEEDUP]          N instances (default speedup 5)
+#   scripts/sitl-swarm.sh TYPE... [SPEEDUP]    one instance per TYPE, in order:
+#                                              copter or rover
+#   scripts/sitl-swarm.sh stop                 stop every instance started here
+#   scripts/sitl-swarm.sh status               list running instances
 #
 # Instance i (0-based) is agent i+1. It serves MAVLink on TCP 5760+10*i,
 # runs in its own directory under RUN_DIR (own eeprom.bin and logs), uses
@@ -11,20 +13,30 @@
 # i+1's simulated start position relative to ORIGIN -- so the vehicles never
 # overlap and one shared local frame describes all of them. Connect with:
 #
-#   python scripts/sitl_swarm_mission.py --count N --host <host>
+#   python scripts/sitl_swarm_mission.py --count N --host <host> \
+#       [--vehicles copter,copter,rover]
+#
+# A copter is ArduCopter (binary arducopter, model FRAME, copter.parm); a
+# rover is ArduRover (binary ardurover, model ROVER_FRAME, rover.parm). The
+# names sim_vehicle.py uses (-v ArduCopter / -v Rover) do not lower-case to
+# the binary names, so the mapping is explicit here.
 #
 # Environment:
-#   ARDUPILOT_DIR  ArduPilot checkout with arducopter built (default ~/ardupilot)
+#   ARDUPILOT_DIR  ArduPilot checkout with the binaries built (default ~/ardupilot)
+#   VEHICLES       comma-separated types for the "N" form, e.g.
+#                  copter,copter,copter,rover (default: all copter)
 #   ORIGIN         LAT,LON,ALT,HEADING of the simulator's (0,0)
 #                  (default 35.1264,33.4299,100,0; must match --origin)
 #   AREA           simulated area side in metres (default 100, as SimulationConfig)
 #   RUN_DIR        where instance directories and the pid file live
 #                  (default /tmp/eudis-sitl-swarm)
 #   FRAME          ArduCopter frame model (default quad)
+#   ROVER_FRAME    ArduRover frame model (default rover)
 #   DRY_RUN=1      print what would be started and exit; needs no ArduPilot
 #
 # Prerequisites: Linux or WSL2 with an ArduPilot checkout and
 #   cd "$ARDUPILOT_DIR" && ./waf configure --board sitl && ./waf copter
+#   (and ./waf rover for any rover)
 # Each instance waits on its TCP port until a client connects, so starting
 # them costs nothing until the mission script attaches.
 set -Eeuo pipefail
@@ -34,6 +46,8 @@ ORIGIN="${ORIGIN:-35.1264,33.4299,100,0}"
 AREA="${AREA:-100}"
 RUN_DIR="${RUN_DIR:-/tmp/eudis-sitl-swarm}"
 FRAME="${FRAME:-quad}"
+ROVER_FRAME="${ROVER_FRAME:-rover}"
+VEHICLES="${VEHICLES:-}"
 DRY_RUN="${DRY_RUN:-0}"
 BASE_PORT=5760
 PORT_STRIDE=10
@@ -41,7 +55,7 @@ MAX_INSTANCES=16
 PID_FILE="${RUN_DIR}/pids"
 
 usage() {
-    sed -n '2,8p' "$0" | sed 's/^# \{0,1\}//' >&2
+    sed -n '2,10p' "$0" | sed 's/^# \{0,1\}//' >&2
     exit 2
 }
 
@@ -107,8 +121,15 @@ for index, (east, north) in enumerate(positions):
 PY
 }
 
+# binary, model and defaults file for one vehicle type
+vehicle_binary() { echo "${ARDUPILOT_DIR}/build/sitl/bin/ardu$1"; }
+vehicle_model() { if [[ "$1" == "rover" ]]; then echo "$ROVER_FRAME"; else echo "$FRAME"; fi; }
+vehicle_defaults() { echo "${ARDUPILOT_DIR}/Tools/autotest/default_params/$1.parm"; }
+
 start_all() {
     local count="$1" speedup="$2"
+    shift 2
+    local types=("$@")
     if ! [[ "$count" =~ ^[0-9]+$ ]] || (( count < 1 || count > MAX_INSTANCES )); then
         echo "ERROR: N must be an integer from 1 to ${MAX_INSTANCES}, got '${count}'" >&2
         exit 2
@@ -117,15 +138,31 @@ start_all() {
         echo "ERROR: SPEEDUP must be a positive integer, got '${speedup}'" >&2
         exit 2
     fi
-
-    local binary="${ARDUPILOT_DIR}/build/sitl/bin/arducopter"
-    local defaults="${ARDUPILOT_DIR}/Tools/autotest/default_params/copter.parm"
-    if [[ "$DRY_RUN" != "1" ]]; then
-        if [[ ! -x "$binary" ]]; then
-            echo "ERROR: ${binary} is not built. Build it with:" >&2
-            echo "  cd ${ARDUPILOT_DIR} && ./waf configure --board sitl && ./waf copter" >&2
-            exit 1
+    if (( ${#types[@]} == 1 )); then
+        local single="${types[0]}"
+        types=()
+        for (( i = 0; i < count; i++ )); do types+=("$single"); done
+    fi
+    if (( ${#types[@]} != count )); then
+        echo "ERROR: ${#types[@]} vehicle types given for ${count} instances" >&2
+        exit 2
+    fi
+    local kind
+    for kind in "${types[@]}"; do
+        if [[ "$kind" != "copter" && "$kind" != "rover" ]]; then
+            echo "ERROR: vehicle type must be copter or rover, got '${kind}'" >&2
+            exit 2
         fi
+    done
+
+    if [[ "$DRY_RUN" != "1" ]]; then
+        for kind in $(printf '%s\n' "${types[@]}" | sort -u); do
+            if [[ ! -x "$(vehicle_binary "$kind")" ]]; then
+                echo "ERROR: $(vehicle_binary "$kind") is not built. Build it with:" >&2
+                echo "  cd ${ARDUPILOT_DIR} && ./waf configure --board sitl && ./waf ${kind}" >&2
+                exit 1
+            fi
+        done
         if [[ -f "$PID_FILE" ]]; then
             echo "ERROR: instances already recorded in ${PID_FILE}; run '$0 stop' first" >&2
             exit 1
@@ -139,11 +176,12 @@ start_all() {
         local dir="${RUN_DIR}/inst${instance}"
         local port=$((BASE_PORT + PORT_STRIDE * instance))
         local home="${lat},${lon},${alt},${heading}"
-        local command=("$binary" --model "$FRAME" --speedup "$speedup"
-            -I "$instance" --sysid "$((instance + 1))" --home "$home"
-            --defaults "$defaults")
+        kind="${types[$instance]}"
+        local command=("$(vehicle_binary "$kind")" --model "$(vehicle_model "$kind")"
+            --speedup "$speedup" -I "$instance" --sysid "$((instance + 1))"
+            --home "$home" --defaults "$(vehicle_defaults "$kind")")
         if [[ "$DRY_RUN" == "1" ]]; then
-            echo "instance ${instance} agent $((instance + 1)) port ${port} home ${home}"
+            echo "instance ${instance} agent $((instance + 1)) port ${port} home ${home} type ${kind}"
             echo "  (cd ${dir} && ${command[*]})"
             continue
         fi
@@ -160,7 +198,7 @@ start_all() {
             wait $! && status=0 || status=$?
             echo "[sitl-swarm] instance ${instance} exited with status ${status}" >>"${dir}/sitl.log"
         ) </dev/null >/dev/null 2>&1 &
-        echo "started instance ${instance} (agent $((instance + 1))) on TCP ${port}, home ${home}"
+        echo "started instance ${instance} (agent $((instance + 1)), ${kind}) on TCP ${port}, home ${home}"
     done <<<"$home_lines"
     # Every subshell appends its pid before the binary does any work; give
     # them a moment so 'status' straight after start is complete.
@@ -175,5 +213,19 @@ case "$1" in
     stop) stop_all ;;
     status) status_all ;;
     -h|--help) usage ;;
-    *) start_all "$1" "${2:-5}" ;;
+    copter|rover)
+        # TYPE... [SPEEDUP]: every leading word is a vehicle type.
+        types=()
+        while [[ $# -gt 0 && ( "$1" == "copter" || "$1" == "rover" ) ]]; do
+            types+=("$1")
+            shift
+        done
+        [[ $# -le 1 ]] || usage
+        start_all "${#types[@]}" "${1:-5}" "${types[@]}"
+        ;;
+    *)
+        [[ $# -le 2 ]] || usage
+        IFS=',' read -r -a env_types <<<"${VEHICLES:-copter}"
+        start_all "$1" "${2:-5}" "${env_types[@]}"
+        ;;
 esac

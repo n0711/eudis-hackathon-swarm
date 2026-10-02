@@ -266,3 +266,81 @@ def test_setpoints_hold_the_takeoff_altitude_once_it_is_known(monkeypatch) -> No
     vehicle.command_toward((10.0, 0.0), altitude_m=30.0)
     altitudes = [fields[7] for fields in vehicle._connection.setpoints]  # noqa: SLF001
     assert altitudes == [18.7, 20.0, 30.0]
+
+
+class _FakeArmMavutil:
+    class mavlink:  # noqa: N801 - mirrors pymavlink's attribute name
+        MAV_CMD_COMPONENT_ARM_DISARM = 400
+        MAV_CMD_DO_SET_MODE = 176
+        MAV_RESULT_ACCEPTED = 0
+        MAV_FRAME_GLOBAL_RELATIVE_ALT_INT = 6
+
+
+def test_arm_ignores_the_set_mode_acknowledgement(monkeypatch) -> None:
+    """Only the arm command's own ACK counts; set_mode's must not end the wait."""
+
+    import eudis_swarm.sitl as sitl
+
+    monkeypatch.setattr(sitl, "_require_mavutil", lambda: _FakeArmMavutil)
+    vehicle = _connected(
+        [
+            _Message("COMMAND_ACK", command=176, result=0),  # set_mode's ACK
+            _Message("COMMAND_ACK", command=400, result=4),  # arm refused (EKF)
+            _Message("COMMAND_ACK", command=400, result=0),  # arm accepted
+            _Message("COMMAND_ACK", command=400, result=0),
+        ]
+    )
+    sent: list[tuple] = []
+    vehicle._connection.command_long_send = lambda *a: sent.append(a)  # noqa: SLF001
+    vehicle.arm(settle_timeout=5.0)
+    assert vehicle._connection.requested_modes == ["GUIDED"]  # noqa: SLF001
+    assert len(sent) == 3  # retried through the stale and the refused ACKs
+    assert len(vehicle._connection.queue) == 1  # noqa: SLF001 - stopped at the first accept
+
+
+def test_arm_times_out_when_never_accepted(monkeypatch) -> None:
+    import eudis_swarm.sitl as sitl
+
+    monkeypatch.setattr(sitl, "_require_mavutil", lambda: _FakeArmMavutil)
+    vehicle = _connected([])
+    vehicle._connection.command_long_send = lambda *a: None  # noqa: SLF001
+    with pytest.raises(TimeoutError, match="arm command"):
+        vehicle.arm(settle_timeout=0.01)
+
+
+def test_a_rover_hold_is_accepted() -> None:
+    vehicle = _connected([_Message("HEARTBEAT")])
+    assert vehicle.hold("HOLD") is True
+
+
+def test_two_vehicles_with_different_homes_share_one_frame(monkeypatch) -> None:
+    """One mission frame: positions comparable, a target is one global point."""
+
+    import eudis_swarm.sitl as sitl
+
+    monkeypatch.setattr(sitl, "_require_mavutil", lambda: _FakeMavutil)
+    origin = (35.1264, 33.4299)
+    west = _connected([_position(1000, 35.1264, 33.4299)], origin=origin)
+    east = _connected([_position(1000, 35.1264, 33.4302)], origin=origin)
+    west.observe()
+    east.observe()
+
+    # MAVLink carries degrees * 1e7 as integers: centimetre-level rounding.
+    assert west.position == pytest.approx((0.0, 0.0), abs=0.02)
+    assert east.position[0] == pytest.approx(27.3, abs=0.1)  # 0.0003 deg east
+    assert east.position[1] == pytest.approx(west.position[1], abs=1e-9)
+
+    west.command_toward((50.0, 40.0), altitude_m=20.0)
+    east.command_toward((50.0, 40.0), altitude_m=25.0)
+    (west_fields,), (east_fields,) = (
+        west._connection.setpoints,  # noqa: SLF001
+        east._connection.setpoints,  # noqa: SLF001
+    )
+    assert west_fields[5:7] == east_fields[5:7]  # identical lat/lon setpoint
+    assert (west_fields[7], east_fields[7]) == (20.0, 25.0)  # own altitude bands
+
+    # Without a shared origin each frame pins to its own home: not comparable.
+    alone = SitlVehicle("tcp:127.0.0.1:5770")
+    alone._connection = _FakeConnection([_position(1000, 35.1264, 33.4302)])  # noqa: SLF001
+    alone.observe()
+    assert alone.position == (0.0, 0.0)

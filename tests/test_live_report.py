@@ -12,9 +12,11 @@ from fake_fleet import FakeAutopilot, FakeWorld
 from eudis_swarm.config import SimulationConfig
 from eudis_swarm.live_mission import Record, run_logged, write_jsonl
 from eudis_swarm.live_report import (
+    _separation,
     format_comparison,
     format_vehicle_table,
     main,
+    step_separation,
     summarize,
     summarize_run,
 )
@@ -218,3 +220,88 @@ def test_the_command_line_report(tmp_path: Path, capsys) -> None:
         write_jsonl([r for r in point_mass if r["type"] != "result"], stream)
     assert main([str(broken)]) == 2
     assert "expected one result record" in capsys.readouterr().err
+
+
+def _crossing_step(t: float, vehicles: list[tuple[int, float, float, float | None]]):
+    return {
+        "type": "step",
+        "run": "sitl",
+        "t": t,
+        "agents": [],
+        "vehicles": [
+            {"id": agent, "held": False, "position": [x, y], "altitude_m": alt}
+            for agent, x, y, alt in vehicles
+        ],
+        "ownership": {},
+        "events": [],
+    }
+
+
+def test_separation_on_a_constructed_crossing() -> None:
+    """Two copters cross the same point 5 m apart in altitude; a rover below."""
+
+    steps = [
+        _crossing_step(
+            t,
+            [
+                (1, -10.0 + 10.0 * t, 0.0, 20.0),
+                (2, 0.0, -10.0 + 10.0 * t, 25.0),
+                (3, 0.0, 0.0, 0.0),
+            ],
+        )
+        for t in (0.0, 0.5, 1.0, 1.5, 2.0)
+    ]
+    distance, pair = step_separation(steps[2])  # type: ignore[misc]
+    assert (distance, pair) == (5.0, (1, 2))  # tracks cross: altitude is all
+    minimum, which, at, below, counted = _separation(steps, 5.0)
+    assert (minimum, which, at, below, counted) == (5.0, (1, 2), 1.0, 0, 5)
+    assert _separation(steps, 6.0)[3] == 1  # only the crossing instant is < 6 m
+
+    # Same crossing at one altitude: a conflict, and the metric says so.
+    flat = [
+        _crossing_step(
+            t, [(1, -10.0 + 10.0 * t, 0.0, 20.0), (2, 0.0, -10.0 + 10.0 * t, 20.0)]
+        )
+        for t in (0.0, 1.0, 2.0)
+    ]
+    assert _separation(flat, 5.0)[:4] == (0.0, (1, 2), 1.0, 1)
+
+
+def test_separation_ignores_vehicles_without_altitude_and_dedupes_a_step() -> None:
+    step = _crossing_step(0.0, [(1, 0.0, 0.0, 20.0), (2, 1.0, 0.0, None)])
+    assert step_separation(step) is None
+    step = _crossing_step(
+        0.0, [(1, 0.0, 0.0, 20.0), (1, 0.0, 0.0, 22.0), (2, 0.0, 0.0, 30.0)]
+    )
+    assert step_separation(step) == (8.0, (1, 2))  # later record of UAV 1 wins
+
+
+def test_the_live_table_reports_separation_and_types() -> None:
+    config = _config()
+    world = FakeWorld()
+    agents, _tasks = build_scenario(config)
+    vehicles = {a.agent_id: FakeAutopilot(world, a.position) for a in agents}
+    for index, vehicle in enumerate(vehicles.values()):
+        vehicle.altitude_m = 20.0 + 5.0 * index
+    backend = MavlinkBackend(dict(vehicles))
+    _result, records = run_logged(
+        config,
+        run_label="sitl",
+        vehicle_backend=backend,
+        vehicle_types={1: "copter", 2: "copter", 3: "copter", 4: "copter"},
+    )
+
+    (summary,) = summarize(records, separation_threshold_m=100.0)
+    assert summary.min_separation_m is not None and summary.min_separation_m >= 5.0
+    assert summary.steps_below_separation == summary.separation_steps > 0
+    table = format_comparison([summary])
+    assert "| Vehicle types | 1:copter, 2:copter, 3:copter, 4:copter |" in table
+    assert "steps < 100 m" in table
+    with pytest.raises(ValueError, match="threshold"):
+        summarize(records, separation_threshold_m=0.0)
+
+    _result, point_mass = run_logged(config, run_label="point-mass")
+    (baseline,) = summarize(point_mass)
+    assert baseline.min_separation_m is None
+    assert "| Min 3-D separation (live) | n/a |" in format_comparison([baseline])
+    assert "| Vehicle types | n/a |" in format_comparison([baseline])

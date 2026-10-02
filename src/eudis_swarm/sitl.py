@@ -248,18 +248,21 @@ class SitlVehicle:
             0,
         )
 
-    def arm_and_takeoff(
-        self, altitude_m: float, *, settle_timeout: float = 90.0
-    ) -> None:
-        """Put the vehicle in GUIDED, arm it, and climb to ``altitude_m``.
+    def arm(self, *, settle_timeout: float = 90.0) -> None:
+        """Put the vehicle in GUIDED and arm it, without leaving the ground.
 
-        Arming is refused until the autopilot's own pre-arm checks pass, which
-        on a fresh SITL instance means waiting for the EKF to settle. That wait
-        is the reason this takes tens of seconds and cannot be hurried.
+        This is the whole start sequence for a ground vehicle (ArduRover), and
+        the first half of :meth:`arm_and_takeoff` for a copter. Arming is
+        refused until the autopilot's own pre-arm checks pass, which on a fresh
+        SITL instance means waiting for the EKF to settle; that wait is why
+        this takes tens of seconds and cannot be hurried.
+
+        Only an acknowledgement *of the arm command itself* counts: pymavlink's
+        ``set_mode`` produces its own accepted COMMAND_ACK, and taking that one
+        for the arm result returns while the vehicle is still disarmed -- after
+        which a rover silently ignores every position target.
         """
 
-        if altitude_m <= 0.0:
-            raise ValueError("altitude_m must be positive")
         connection = self._require_connection()
         mavutil = _require_mavutil()
 
@@ -285,9 +288,23 @@ class SitlVehicle:
                 and ack.command == (mavutil.mavlink.MAV_CMD_COMPONENT_ARM_DISARM)
                 and ack.result == mavutil.mavlink.MAV_RESULT_ACCEPTED
             ):
-                break
-        else:
-            raise TimeoutError("the vehicle never accepted an arm command")
+                return
+        raise TimeoutError("the vehicle never accepted an arm command")
+
+    def arm_and_takeoff(
+        self, altitude_m: float, *, settle_timeout: float = 90.0
+    ) -> None:
+        """Put the vehicle in GUIDED, arm it, and climb to ``altitude_m``.
+
+        Every later setpoint holds ``altitude_m``, which is how several copters
+        flown together keep to their own altitude band.
+        """
+
+        if altitude_m <= 0.0:
+            raise ValueError("altitude_m must be positive")
+        connection = self._require_connection()
+        mavutil = _require_mavutil()
+        self.arm(settle_timeout=settle_timeout)
 
         connection.mav.command_long_send(
             connection.target_system,
@@ -360,10 +377,11 @@ class SitlVehicle:
         This is the SITL-side fail-stop: a simulated failure must actually
         stop the aircraft rather than leave it flying to its last setpoint.
         ArduCopter's BRAKE stops hardest; LOITER is gentler. Both hover.
+        ArduRover's HOLD stops a ground vehicle where it is.
         """
 
-        if mode not in ("BRAKE", "LOITER"):
-            raise ValueError("mode must be BRAKE or LOITER")
+        if mode not in ("BRAKE", "LOITER", "HOLD"):
+            raise ValueError("mode must be BRAKE, LOITER or HOLD")
         return self.set_mode(mode)
 
     def distance_to(self, target: Position) -> float:
