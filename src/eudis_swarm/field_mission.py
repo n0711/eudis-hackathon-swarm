@@ -82,6 +82,9 @@ class FieldTiming:
                 raise MissionFileError(f"timing.{item.name} must be positive")
         if self.freshness_timeout >= self.lease_timeout:
             raise MissionFileError("freshness_timeout must be less than lease_timeout")
+        if self.claim_settle >= self.freshness_timeout:
+            # an unbound claim is not renewed, so it must bind while FRESH.
+            raise MissionFileError("claim_settle must be less than freshness_timeout")
         if self.rebroadcast_interval >= self.freshness_timeout:
             # a claim must be re-offered at least once while still FRESH, or a
             # single lost packet would make healthy ownership look STALE.

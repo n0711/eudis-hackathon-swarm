@@ -18,6 +18,7 @@ document that assumes you know nothing.
 | Know why the problem is real, with citations | [`threat_context.md`](threat_context.md) |
 | Pick up the vehicle dynamics and energy work | [`vehicle_model.md`](vehicle_model.md) |
 | Run the standalone SITL experiment and see the integration plan | [`sitl.md`](sitl.md) |
+| Run the protocol as real processes over UDP (lab TRL4 evidence) | [`field_node.md`](field_node.md) |
 | See how the project got here | [`milestones.md`](milestones.md) |
 | Compare against published research and industry | [`prior_art.md`](prior_art.md) |
 | Understand the supplied IN424 exploration material | [`exploration_reference.md`](exploration_reference.md) |

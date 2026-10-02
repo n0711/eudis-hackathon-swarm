@@ -816,7 +816,7 @@ def build_transport(
         clock=clock,
         destinations=resolved,
         drop_rx=faults.drops,
-        drop_tx=faults.drops,
+        drop_tx=faults.blocks,
     )
 
 

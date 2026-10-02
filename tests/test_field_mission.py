@@ -98,6 +98,9 @@ BAD = {
     "rebroadcast too slow": mission_document(
         timing={"freshness_timeout": 0.5, "rebroadcast_interval": 0.5}
     ),
+    "settle too long": mission_document(
+        timing={"freshness_timeout": 0.5, "claim_settle": 0.5}
+    ),
     "bad mode": mission_document(network={"mode": "mesh"}),
     "broadcast no address": mission_document(network={"mode": "broadcast", "port": 1}),
     "broadcast bad port": mission_document(

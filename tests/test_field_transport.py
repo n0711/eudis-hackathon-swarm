@@ -249,12 +249,16 @@ def test_relay_reoffers_lease_valid_evidence_and_completions_forever() -> None:
         TaskClaimRelease,
         TaskCompletionEvidence,
     }
+    # a superseded generation is not re-offered once the newer one is held.
+    renewal = TaskClaim(3, 2, 2, 1.5, 0.5, 1.0)
+    relay.admit(renewal, 0.6)
+    assert renewal in relay.reoffer(0.7) and CLAIM not in relay.reoffer(0.7)
     # past retention only terminal evidence keeps being re-offered.
     assert relay.reoffer(2.0) == (COMPLETION,)
-    assert relay.seen_count == 5
+    assert relay.seen_count == 6
     # long-dead vote generations are forgotten to bound memory.
     relay.reoffer(10.0)
-    assert relay.seen_count == 4
+    assert relay.seen_count == 5
     relay.remember_own(VOTE, 10.0)
     relay.remember_own(VOTE, 11.0)
     assert relay.admit(VOTE, 11.0) is False

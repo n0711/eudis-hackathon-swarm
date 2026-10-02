@@ -426,6 +426,14 @@ class EvidenceRelay:
 
         offered: list[tuple[MessageId, FieldMessage]] = []
         expired_votes: list[MessageId] = []
+        # only the newest generation per (task, owner) is worth re-offering;
+        # an older one is obsolete at every receiver that has the newer.
+        newest_epoch: dict[tuple[int, int], int] = {}
+        for held in self._held.values():
+            message = held.message
+            if isinstance(message, TaskClaim):
+                key = (message.task_id, message.owner_agent_id)
+                newest_epoch[key] = max(newest_epoch.get(key, 0), message.epoch)
         for identity, held in self._held.items():
             kind = identity[0]
             if kind == MessageKind.VOTE.value:
@@ -438,8 +446,15 @@ class EvidenceRelay:
             if kind == MessageKind.COMPLETION.value:
                 offered.append((identity, held.message))
             elif kind in (MessageKind.CLAIM.value, MessageKind.RELEASE.value):
+                message = held.message
+                if (
+                    isinstance(message, TaskClaim)
+                    and message.epoch
+                    < newest_epoch[(message.task_id, message.owner_agent_id)]
+                ):
+                    continue
                 if now - held.first_received_at <= self._retention:
-                    offered.append((identity, held.message))
+                    offered.append((identity, message))
         for identity in expired_votes:
             del self._held[identity]
         offered.sort(key=lambda item: repr(item[0]))

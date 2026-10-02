@@ -429,6 +429,9 @@ def evaluate(
     summary["tasks_completed"] = len(completers)
     summary["completion_events"] = len(completions)
     summary["duplicate_completions"] = duplicates
+    summary["last_completion_s"] = (
+        rel(completions[-1]["wall"]) if completions else None
+    )
 
     final_views = {
         log.node: log.records[-1]
@@ -634,6 +637,14 @@ def evaluate(
     summary["false_declarations"] = sum(
         1 for item in detection if item["target_actually_alive"]
     )
+    # a wrong declaration while partitioned is the expected cost of silence
+    # being ambiguous; one on a connected network measures link loss.
+    summary["false_declarations_connected"] = sum(
+        1
+        for item, record in zip(detection, declared)
+        if item["target_actually_alive"]
+        and not any(a <= record["wall"] <= b for a, b in windows)
+    )
     summary["retractions"] = [
         {
             "node": int(record["node"]),
@@ -691,12 +702,15 @@ def format_report(report: Report) -> str:
         f"  max disagreement after     {summary.get('max_disagreement_after_convergence_s')} s",
         f"  tasks completed            {summary.get('tasks_completed')}/"
         f"{summary.get('tasks_total')}",
+        f"  last completion            {summary.get('last_completion_s')} s",
         f"  duplicate completions      {summary.get('duplicate_completions')}",
         f"  concurrent ownership total {summary.get('concurrent_ownership_total_s')} s",
         f"  concurrent (connected) max {summary.get('concurrent_ownership_connected_max_s')} s",
         f"  contest resolutions        {summary.get('contest_resolutions')}",
         f"  declarations (false)       {len(summary.get('declarations') or [])} "
-        f"({summary.get('false_declarations')}), quorum {summary.get('quorum')}",
+        f"({summary.get('false_declarations')}; "
+        f"{summary.get('false_declarations_connected')} outside partitions), "
+        f"quorum {summary.get('quorum')}",
         f"  retractions                {len(summary.get('retractions') or [])}",
         f"  fail-stop detection        {summary.get('fail_stop_detection_latency_s')}",
     ]

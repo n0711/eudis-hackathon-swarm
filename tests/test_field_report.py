@@ -149,6 +149,7 @@ def test_a_split_brain_that_heals_passes(tmp_path: Path) -> None:
     assert summary["contest_resolutions"][0]["winner"] == 1
     assert summary["concurrent_ownership_episodes"][0]["overlaps_partition"]
     assert summary["false_declarations"] == 1
+    assert summary["false_declarations_connected"] == 0
     assert "PASS" in format_report(report)
 
 

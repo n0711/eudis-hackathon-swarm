@@ -218,8 +218,17 @@ class FaultInjector:
             return True
         return self._agent_id in self._control.fail_stop
 
+    def blocks(self, peer_agent_id: int) -> bool:
+        """Whether the link to this peer is cut (partition or window) now."""
+
+        return peer_agent_id in self._blocked
+
     def drops(self, peer_agent_id: int) -> bool:
-        """Whether one datagram to or from this peer is lost now."""
+        """Whether one arriving datagram from this peer is lost now.
+
+        Random loss is applied here, on receipt only, so ``loss`` is the
+        one-hop loss probability rather than compounding at both ends.
+        """
 
         if peer_agent_id in self._blocked:
             return True

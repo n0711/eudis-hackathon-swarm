@@ -70,6 +70,7 @@ def test_injector_combines_windows_and_the_control_file(tmp_path: Path) -> None:
     assert injector.refresh(1.0) is True
     assert injector.blocked == {3}
     assert injector.drops(3) and not injector.drops(2)
+    assert injector.blocks(3) and not injector.blocks(2)
     assert injector.refresh(5.5) is True
     assert injector.blocked == {2, 3}
     # a bad edit keeps the previous state rather than silently healing.
