@@ -224,6 +224,10 @@ The [layout/fault-time check](docs/robustness_study.md) shows how strongly the
 completion gap varies with geometry and when the physical failure happens.
 Across 440 runs, central control failed 68 missions and distributed failed none,
 with the two modes detecting losses identically at every range.
+A receiver-local task-assignment policy optimised with simulated QAOA and
+simulated quantum annealing, and its paired comparison against the distance and
+connectivity policies, are in
+[`docs/quantum_optimisation.md`](docs/quantum_optimisation.md).
 
 Figures are deliberately not repeated here: one source of truth, so a stale copy
 cannot contradict the measured one.
@@ -400,6 +404,9 @@ eudis-swarm/
 │   ├── observation_replay.py   # receiver-local external observation JSONL replay
 │   ├── generalization.py      # paired fleet/network evaluator CLI
 │   ├── robustness.py          # paired layout/fault-time evaluator CLI
+│   ├── quantum_opt.py         # assignment QUBO; brute-force, QAOA and SQA solvers; export
+│   ├── quantum_policy.py      # receiver-local quantum allocation preference
+│   ├── quantum_study.py       # paired distance/connectivity/quantum study CLI
 │   ├── mission_contract.py    # versioned operator intent and degradation policy
 │   ├── sitl.py                # optional standalone one-vehicle ArduPilot utility
 │   ├── simulation.py           # local claim rounds, logical clock, physics, orchestration, CLI
@@ -424,6 +431,7 @@ eudis-swarm/
 │   ├── measured_results.md                # reproducible sweep results, and their stated limits
 │   ├── generalization_study.md            # paired fleet/network comparison
 │   ├── robustness_study.md                # layout/fault-time sensitivity
+│   ├── quantum_optimisation.md            # quantum-simulated allocation and its study
 │   ├── demo_runbook.md                    # repeatable hackathon demonstration
 │   ├── observation_integration.md         # standalone ISR replay and proposed integration boundary
 │   ├── threat_context.md                  # cited GNSS interference context, and what it does not show

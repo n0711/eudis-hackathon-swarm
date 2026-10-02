@@ -13,6 +13,7 @@ document that assumes you know nothing.
 | Know what has actually been measured, and what has not | [`measured_results.md`](measured_results.md) |
 | Inspect the paired fleet/network comparison and raw data | [`generalization_study.md`](generalization_study.md) |
 | Inspect the layout/fault-time sensitivity check | [`robustness_study.md`](robustness_study.md) |
+| See the quantum-simulated allocation policy and its measured effect | [`quantum_optimisation.md`](quantum_optimisation.md) |
 | Understand the state model, quorum, leases and reconciliation | [`distributed_state_foundation.md`](distributed_state_foundation.md) |
 | See the state machines as generated tables | [`autonomy_efsm.md`](autonomy_efsm.md) |
 | Know why the problem is real, with citations | [`threat_context.md`](threat_context.md) |

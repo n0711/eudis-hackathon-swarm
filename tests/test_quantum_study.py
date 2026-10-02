@@ -176,3 +176,23 @@ def test_summary_counts_paired_differences() -> None:
     assert quantum["faster_than_distance"] == "1"
     assert quantum["slower_than_distance"] == "1"
     assert math.isclose(float(quantum["mean_duration"]), 10.0)
+
+
+def test_committed_jammed_pair_is_reproduced() -> None:
+    """Seed 4, 4 UAVs, partitioning jammer: rows from the committed CSV."""
+
+    cases = {
+        case.policy: case
+        for case in study_cases((4,), fleets=(4,), topologies=("sparse_jammed",))
+    }
+    distance = run_case(cases["distance"]).run_row
+    quantum = run_case(cases["quantum_qaoa"]).run_row
+    assert distance["mission_duration"] == "10.000000"
+    assert distance["flight_distance"] == "311.476836"
+    assert distance["contested_duration"] == "3.000000"
+    assert quantum["mission_duration"] == "7.000000"
+    assert quantum["flight_distance"] == "200.682542"
+    assert quantum["contested_duration"] == "2.000000"
+    assert quantum["quantum_solves"] == "3"
+    assert quantum["quantum_changed_choices"] == "1"
+    assert quantum["quantum_suboptimal_solves"] == "0"

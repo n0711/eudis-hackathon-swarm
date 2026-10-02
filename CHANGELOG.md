@@ -8,6 +8,15 @@ and interfaces change between prototypes.
 ## [Unreleased]
 
 ### Added
+- `--allocation-policy quantum` (`--quantum-solver qaoa|sqa`): each idle UAV
+  solves a bounded assignment QUBO over itself and the peers it has HEARD
+  heartbeats from, using a pure-Python statevector QAOA simulator or simulated
+  quantum annealing, and puts the objective its plan assigns to itself first.
+  Claims and reconciliation still decide ownership. Default policy unchanged.
+  `quantum_opt.py` also provides an exact reference solver and plain
+  BQM/Ising exports. `eudis-swarm-quantum-study` runs the paired comparison;
+  results, limits and raw CSV in `docs/quantum_optimisation.md`. This is
+  classical simulation; no quantum speedup is claimed.
 - `docs/trl4_validation.md`: the readiness scale used, per-component status,
   the criteria under which a TRL4 claim is justified, seven laboratory test
   cards for equipment day, and an evidence log to be filled only from
