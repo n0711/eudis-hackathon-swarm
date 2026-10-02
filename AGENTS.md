@@ -175,5 +175,6 @@ can describe a design that was written up but not (yet) merged.
   machine — check `.venv/bin/python --version` before assuming `pip install
   -e ".[dev]"` will succeed. Upgrade `pip` first (`python -m pip install
   --upgrade pip`) if a resolve seems stuck.
-- `pyproject.toml`'s `[project.urls]` still point at `github.com/n0711/eudis-swarm`,
-  not this repo's actual name/remote (`eudis-hackathon-swarm`).
+- `pyproject.toml`'s `[project.urls]` now point at this repo's actual
+  name/remote (`eudis-hackathon-swarm`); this was a stale-URL item in earlier
+  revisions of this file, fixed upstream since.

@@ -8,6 +8,14 @@ and interfaces change between prototypes.
 ## [Unreleased]
 
 ### Added
+- `MavlinkBackend` (`src/eudis_swarm/mavlink_backend.py`): a `VehicleBackend`
+  adapter that drives one agent's physical motion from live `SitlVehicle`
+  telemetry inside an otherwise normal `Simulation` mission, lock-stepped on
+  the vehicle's own clock with a hard wall-clock timeout per step. Every other
+  agent still moves through `PointMassBackend`, unchanged. Fully covered by
+  `tests/test_mavlink_backend.py` against a fake vehicle; not yet run against
+  a live ArduPilot instance (see `docs/sitl.md`). `scripts/sitl_mission_demo.py`
+  runs it against a real SITL connection.
 - A standalone version-1 JSONL observation replay with isolated receiver views,
   source/track timeouts, explicit empty scenes, and two-source sample data.
   It does not connect perception to `Simulation` task creation or movement.

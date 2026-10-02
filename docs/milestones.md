@@ -246,8 +246,10 @@ Modules: [`mission_contract.py`](../src/eudis_swarm/mission_contract.py),
 - **Physical movement boundary.** `VehicleBackend` and `PointMassBackend` route
   physical simulation movement through one interface while retaining the
   point-mass result and a separate analytical communication-only projection.
-  [SITL integration](sitl.md) remains a future adapter; a standalone
-  `SitlVehicle` commands one ArduPilot instance outside `Simulation`.
+  [SITL integration](sitl.md) now has a tested `MavlinkBackend` adapter
+  routing one agent's motion through a standalone `SitlVehicle`'s telemetry
+  inside a real `Simulation` mission; it has not yet been run against a live
+  ArduPilot instance, so treat it as implemented, not as a flown result.
 - **Paired evaluations.** The [fleet/network study](generalization_study.md)
   compares four and six UAVs. The [layout/fault-time study](robustness_study.md)
   adds a second starting layout and two scheduled fault times. Both are

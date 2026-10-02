@@ -1,10 +1,12 @@
 # Software in the loop
 
-This document records the standalone ArduPilot experiment and the remaining
-software-in-the-loop (SITL) integration boundary. `Simulation` currently runs
-the deterministic point-mass backend. `SitlVehicle` can command and observe one
-ArduPilot vehicle, but it is not a `VehicleBackend` and is not wired into the
-simulation loop.
+This document records the standalone ArduPilot experiment and the
+software-in-the-loop (SITL) integration boundary. `Simulation` runs the
+deterministic point-mass backend by default. `SitlVehicle` can command and
+observe one ArduPilot vehicle, and [`MavlinkBackend`](../src/eudis_swarm/mavlink_backend.py)
+now adapts it to the `VehicleBackend` interface so one agent in an otherwise
+normal mission can be driven by live telemetry -- see "Next: integrate one
+vehicle" below for what that does and does not demonstrate.
 
 ## What this must not cost
 
@@ -69,33 +71,42 @@ class VehicleBackend(Protocol):
 mutates authoritative `Agent.position` in place. `Agent.move_toward` delegates
 to it for compatibility with callers outside `Simulation`. Communication-only
 boundaries still call the analytical predictor without invoking the backend.
-There is no `MavlinkBackend` yet; `SitlVehicle` in `sitl.py` offers separate
-`command_toward` and `observe` operations.
+`MavlinkBackend` (`src/eudis_swarm/mavlink_backend.py`) adapts `SitlVehicle`'s
+separate `command_toward`/`observe` operations to the single `move_toward`
+call `Simulation` makes; any agent not named in its vehicle mapping still
+moves through `PointMassBackend`, unchanged.
 
-Before adapting `SitlVehicle`, specify and test the following contract:
+Against the contract specified before it was built:
 
-1. `Simulation` alone decides when a physical update is due. An adapter may
-   command a target and report only a timestamped *observed* position; it must
-   never silently substitute the analytical prediction for missing telemetry.
-2. The adapter updates physical position only. It must not update claims,
-   ownership, `status`, peer stores, or autonomy. Existing transport remains
-   the only route from world truth to receiver-local beliefs.
-3. A physically stopped vehicle must not be commanded or advanced. A *declared*
-   failure must not itself issue a vehicle-stop command. For a real autopilot,
-   merely setting `responsive=False` cannot stop previously commanded motion;
-   fault injection therefore needs a separate, safe SITL-only action before
-   a mixed run can claim to model a fail-stop.
-4. Logical simulator time and autopilot `time_boot_ms` need an explicit mapping.
-   Each observation must have a bounded wait and a defined timeout/error path;
-   no last-known position may be presented as a fresh observation.
-5. Nondeterministic backends must be rejected by the sweep and measured-results
-   paths. The current sweep constructs its own default `Simulation`, so it is
-   deterministic today; a new backend-selection option must enforce this guard.
+1. **Met.** `Simulation` alone calls `move_toward`; the adapter commands a
+   target and reports only `SitlVehicle.position`, the last *observed*
+   telemetry. It never substitutes the analytical prediction.
+2. **Met.** The adapter's only effect is `agent.position = vehicle.position`.
+   It imports nothing from `task_claims.py`, `peer_state.py`, or `autonomy.py`.
+3. **Partly met.** A physically stopped (`responsive=False`) agent is never
+   commanded or advanced here, and a merely *declared* failure does not stop
+   it — both tested. What is **not** built: the doc's own caveat that setting
+   `responsive=False` "cannot stop previously commanded motion" on a real
+   autopilot still holds. A UAV injected with a physical failure mid-flight
+   stops receiving new setpoints but keeps flying toward its last one; a
+   genuine fail-stop still needs the separate, safe SITL-only action
+   (e.g. commanding RTL or a loiter) this adapter does not send.
+4. **Met.** Lock-step on `vehicle.vehicle_time_s`, never wall-clock; a stalled
+   step raises `TimeoutError` rather than reporting a stale position as fresh.
+5. **Met structurally, not by a runtime guard.** No CLI or `sweep.py` option
+   selects a backend, so there is nothing for a runtime check to reject yet.
+   `MavlinkBackend` is reachable only from `scripts/sitl_mission_demo.py`,
+   never from `eudis_swarm.simulation`'s or `eudis_swarm.sweep`'s import graph
+   (enforced by `tests/test_mavlink_backend.py`, mirroring `test_sitl.py`'s
+   own check for `sitl.py`). If a backend-selection flag is ever added to
+   either CLI, it must carry this guard explicitly.
 
-Acceptance tests for that future adapter should cover command/observation
-ordering, stale or missing telemetry, timeout, physical stop versus declaration,
-no backend call on communication-only boundaries, and evidence delivery across
-a partition. None requires changing task allocation or autonomy semantics.
+`tests/test_mavlink_backend.py` covers command/observation ordering, stale or
+missing telemetry and timeout, physical stop versus declaration, no backend
+call on communication-only boundaries, and one full `Simulation` mission with
+one integrated agent converging exactly as the all-point-mass case does. None
+of it changes task allocation or autonomy semantics, and none of it needs a
+live autopilot — the same discipline `test_sitl.py` already follows.
 
 ## Time
 
@@ -109,9 +120,10 @@ vehicles keep moving whether or not anything is asking. Two options:
 2. **Free-running.** Sample telemetry on a timer; logical time tracks wall-clock.
    Closer to reality, and it discards the reproducibility of step boundaries.
 
-Start with lock-step, with ArduPilot's `--speedup` to make it bearable, and a
-hard timeout per step so a stalled vehicle fails loudly. Free-running is the
-better long-term answer and the wrong thing to attempt first.
+`MavlinkBackend` implements lock-step: run ArduPilot with `--speedup` to make
+it bearable, and it raises after a hard wall-clock timeout per step so a
+stalled vehicle fails loudly rather than hanging. Free-running remains the
+better long-term answer and was deliberately not attempted first.
 
 ## Environment on this machine
 
@@ -224,8 +236,15 @@ behind the `sitl` extra, one aircraft flying to commanded waypoints under
 repeated legs on one SITL vehicle and compare observations with the point-mass
 prediction. This is not a comparison of two `Simulation` backends.
 
-**Next — integrate one vehicle.** Implement the contract above behind an adapter
-and verify one `Simulation` mission without changing its evidence semantics.
+**Phase 4 — integrate one vehicle.** *(adapter done; not yet flown)*
+`MavlinkBackend` and `scripts/sitl_mission_demo.py` implement the contract
+above and are verified against `tests/test_mavlink_backend.py`'s fakes,
+including one full `Simulation` mission converging with the same evidence
+semantics as the all-point-mass case. **No one has yet run the script against
+a live ArduPilot instance** — that needs the WSL2/ArduPilot environment
+described above, which this change was written without access to. Treat it as
+implemented and tested, not as flown, until someone runs it and records what
+happened here.
 
 **Later — more than one.** Multiple SITL instances, distinct MAVLink ports.
 This is where it becomes expensive: process management, port allocation, and
@@ -235,14 +254,23 @@ startup time per vehicle.
 
 For the October hackathon, use the deterministic simulator and its trace replay
 as the primary demonstration. The standalone one-vehicle SITL result supports a
-model-error discussion; it does not demonstrate swarm coordination on ArduPilot.
-See the [demo runbook](demo_runbook.md) for the repeatable presentation path.
+model-error discussion; by itself it still does not demonstrate swarm
+coordination on ArduPilot. See the [demo runbook](demo_runbook.md) for the
+repeatable presentation path.
 
 Phase 1 is worth doing regardless: it removes a duplicated motion model and
 names a distinction the code was blurring.
 
-The standalone flights and comparison produce a useful observation. Integrating
-one vehicle with `Simulation` should precede any multi-vehicle attempt. Several
-SITL instances add process management, port allocation, and startup time; keep
-the deterministic simulator as the primary demonstration and use SITL as
-supporting evidence.
+Phase 4 closes the specific gap Phase 2/3 left open — a real autopilot's
+telemetry now can drive one agent inside an actual coordination mission — but
+it is a coded, tested capability waiting on a live run, not a result. Before
+presenting it as one, run `scripts/sitl_mission_demo.py` against a real SITL
+instance at least once and record what actually happened, the same way Phase
+2 and Phase 3's numbers above were recorded rather than assumed. It also does
+not model a true fail-stop on a real vehicle (see point 3 above) — say so if
+asked, rather than letting the distributed-failure story imply it does.
+
+Several SITL instances add process management, port allocation, and startup
+time; multi-vehicle SITL stays out of scope for this hackathon. Keep the
+deterministic simulator as the primary demonstration and use the one-vehicle
+integration, once actually flown, as a second, narrower proof point.
