@@ -429,6 +429,9 @@ def evaluate(
     summary["tasks_completed"] = len(completers)
     summary["completion_events"] = len(completions)
     summary["duplicate_completions"] = duplicates
+    # reported beside the verdict, never folded into it: the guarantee is
+    # about agreement, and a run can be too short to finish the mission.
+    summary["mission_complete"] = len(completers) == len(timeline.task_ids)
     summary["last_completion_s"] = rel(completions[-1]["wall"]) if completions else None
 
     final_views = {
@@ -689,6 +692,10 @@ def format_report(report: Report) -> str:
     }[report.exit_code]
     lines = [
         f"field report: {verdict}",
+        f"  mission complete           "
+        f"{'YES' if summary.get('mission_complete') else 'NO'} "
+        f"({summary.get('tasks_completed')}/{summary.get('tasks_total')} tasks; "
+        "the verdict is the coordination guarantee only)",
         f"  nodes                      {summary.get('nodes')}",
         f"  observation                {summary.get('observation_s')} s",
         f"  partition windows          {summary.get('partition_windows_s')}",

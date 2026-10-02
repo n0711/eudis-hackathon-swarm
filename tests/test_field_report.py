@@ -151,6 +151,9 @@ def test_a_split_brain_that_heals_passes(tmp_path: Path) -> None:
     assert summary["false_declarations"] == 1
     assert summary["false_declarations_connected"] == 0
     assert "PASS" in format_report(report)
+    # nothing was completed: the guarantee holds, the mission did not finish.
+    assert summary["mission_complete"] is False
+    assert "mission complete           NO (0/1 tasks" in format_report(report)
 
 
 def test_the_wrong_winner_is_a_violation(tmp_path: Path) -> None:
@@ -257,6 +260,7 @@ def test_fail_stop_latency_duplicates_and_malformed_lines(tmp_path: Path) -> Non
     assert summary["fail_stop_detection_latency_s"] == {"3": {"1": 0.8, "2": 0.9}}
     assert summary["duplicate_completions"] == {"1": [1, 2]}
     assert summary["tasks_completed"] == 1
+    assert summary["mission_complete"] is True
     assert summary["false_declarations"] == 0
 
 

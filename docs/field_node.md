@@ -13,8 +13,9 @@ validated in lab") for EUDIS Defence Hackathon 2026, Challenge 2. What it
 does and does not show is spelled out in
 [What this validates](#what-this-validates--and-what-it-does-not). The
 [results](#results-localhost-only) below come from **localhost** runs only.
-No hardware run has been recorded yet; the [lab test card](#lab-test-card)
-explains how to make one.
+No hardware run has been recorded yet; the [lab test cards](#lab-test-cards)
+(LT4, LT5, LT6 in [`trl4_validation.md`](trl4_validation.md)) explain how to
+make one.
 
 ## Architecture
 
@@ -158,7 +159,8 @@ t=8 s it heals, by rewriting `logs/partition/control.json`. It then waits and
 runs the report. The exit status is the report's: 0 pass, 1 violated,
 2 inconclusive. Other schedules:
 
-- `examples/field/fail_stop_4.json` stops node 4 at t=4 s;
+- `examples/field/fail_stop_4.json` stops node 4 at t=4 s. Use `--duration 40`
+  so that its task can be re-claimed and flown before the run ends;
 - `--loss 0.2` adds 20% random loss to each one-hop delivery, applied at the
   receiver.
 
@@ -252,51 +254,144 @@ clock, so no clock synchronisation is needed. The summary reports:
 The simulator delivers within one tick, so measured latency is reported as
 latency the simulator does not model.
 
-## Lab test card
+## Lab test cards
 
-**Purpose:** record evidence that, on real hardware and a real network, the
-swarm's replicas converge on one owner per task after a partition heals, and
-that the losing claimant stands down.
+These are the procedures that [`trl4_validation.md`](trl4_validation.md)
+refers to as LT4, LT5 and LT6. Record each run as one row in that document's
+evidence log.
 
-**Prerequisites**
+The report prints two separate verdicts. `field report: PASS|VIOLATED|INCONCLUSIVE`
+is the **coordination guarantee**, and it alone sets the exit code.
+`mission complete YES|NO` says whether every task was completed. A run that is
+too short can satisfy the guarantee without finishing the mission, so every
+card below requires **both**.
 
-- [ ] 4 hosts (Raspberry Pi 4/5 or laptops), Python 3.11 or later, this
-  repository at the same commit on each. Record the commit hash: `git rev-parse HEAD`.
-- [ ] One WiFi access point, with all hosts on one subnet and static IPs.
-- [ ] Clocks synchronised with `chrony`. Record `chronyc tracking` on each
-  host.
-- [ ] `mission_lan.json` with the real addresses, identical on every host.
-  Check with `sha256sum mission_lan.json`.
-- [ ] A notebook or phone stopwatch for recording fault times.
+Record for every run:
 
-**Steps**
+- the commit (`git rev-parse HEAD`);
+- the mission file hash (`sha256sum <mission>`);
+- the hardware and OS;
+- the full report text and `report.json`;
+- the node logs.
 
-| # | Do | Expect | Record |
-| --- | --- | --- | --- |
-| 1 | Localhost rehearsal on one laptop: command (a) above | `field report: PASS`, exit 0 | the report text |
-| 2 | Link probe between two hosts, 3000 probes at 20 Hz, 300 B, once per host pair you will use | a summary table | the CSV, the summary JSON, host placement and distance |
-| 3 | Start all 4 nodes with one `--start-at`, `--duration 180` | each node prints nothing until it stops | start wall time |
-| 4 | Wait 20 s (connected baseline) | — | — |
-| 5 | Partition 2+2 by firewall (or WiFi off on one pair), hold for 30 s | — | wall time of partition |
-| 6 | Heal: undo the firewall rules or turn WiFi on | — | wall time of heal |
-| 7 | Wait for the nodes to stop (`--duration`) | each prints `stopped (duration)` | — |
-| 8 | Collect logs on one machine, then run `field_report logs/ --json report.json` (add `--reconnect-at <heal wall time>` if the firewall or WiFi method was used) | a report | report text and `report.json` |
-| 9 | Optional fail-stop: repeat 3-8, but at step 5 pull the power on one Pi | survivors declare it, re-claim its task, complete | detection latency per survivor |
+### LT4 — separate processes on one host (localhost)
 
-**Pass/fail criteria**
+**Equipment:** any laptop with Python 3.11 or later and this repository
+installed (`pip install -e ".[dev]"`).
 
-- **Pass:** exit 0, with `divergent at reconnect` non-empty (so the partition
-  really split ownership), convergence within the bound
-  (`lease_timeout + rebroadcast_interval` = 1.75 s for the example timing),
-  `contest resolutions` all won by the lowest ID, and no violations.
-- **Fail:** exit 1. Keep all logs; the violation line names the task and the
-  check that failed (G1, G2, G3 or S1).
-- **Inconclusive:** exit 2, for example when the run ended before the bound,
-  or some pair never stayed `HEARD`. Repeat with a longer `--duration` or a
-  better link.
-- Record for every run: the commit, the mission file hash, the host and
-  access point layout, probe results, fault times, the report text, and the
-  convergence time and `concurrent ownership total`.
+| # | Command | Expect |
+| --- | --- | --- |
+| 1 | `python -m pytest tests/test_field_launch.py -q` | `3 passed` |
+| 2 | `python -m eudis_swarm.field_launch --mission examples/field/mission_4uav.json --faults examples/field/partition_2x2.json --duration 20 --logs logs/lt4-partition --report` | exit 0 |
+| 3 | `python -m eudis_swarm.field_launch --mission examples/field/mission_4uav.json --faults examples/field/partition_2x2.json --duration 20 --loss 0.2 --logs logs/lt4-lossy --report` | exit 0 |
+| 4 | `python -m eudis_swarm.field_launch --mission examples/field/mission_4uav.json --faults examples/field/fail_stop_4.json --duration 40 --logs logs/lt4-failstop --report` | exit 0 |
+
+**Pass** only if every condition holds:
+
+- Steps 2–4 all exit 0, and each report shows `field report: PASS` and
+  `mission complete YES (4/4 tasks ...)`.
+- Steps 2 and 3 show `divergent at reconnect` = `[3, 4]` or another non-empty
+  list. That is the evidence the partition really split ownership.
+- Steps 2 and 3 show convergence after reconnect ≤ the printed bound
+  (1.75 s), and every `contest resolutions` entry has the lowest ID as
+  winner.
+- Step 4 shows a `fail-stop detection` latency for each of nodes 1, 2 and 3
+  (about 0.5–0.65 s with this timing) and 0 duplicate completions. Node 4's
+  task is completed by a survivor.
+
+The fail-stop run needs `--duration 40`. Node 4's task becomes claimable
+only after its lease expires, and the survivor then still has to fly the
+leg. With 15 s the guarantee passes but the mission does not finish.
+
+**Fail** on any exit 1, `mission complete NO`, or an empty
+`divergent at reconnect` in steps 2 and 3. An empty list means no split
+brain was created, so the run proves nothing; repeat it.
+
+### LT5 — networked hosts with a real partition
+
+**Equipment:** at least 3 hosts (4 to reproduce the 2+2 split), such as
+Raspberry Pi 4/5 boards or laptops. They need Python 3.11 or later, the same
+commit, one Wi-Fi access point or Ethernet switch, static IPs, and `chrony`
+syncing against one host. You also need a second person with a stopwatch, or
+a phone showing wall-clock time.
+
+**Setup**
+
+1. Copy `examples/field/mission_4uav.json` to `mission_lan.json`. Set each
+   agent's `"address"` to `"<host-ip>:47000"`, and delete agent and task
+   entries beyond the number of hosts. Copy the identical file to every host
+   and compare `sha256sum mission_lan.json` on each.
+2. Run `chronyc tracking` on every host and record the offsets.
+3. Run LT6 between at least one pair of hosts first.
+
+**Run.** Every host uses the same `START`, for example read aloud as
+`date +%s` plus 30.
+
+```bash
+python -m eudis_swarm.field_node --mission mission_lan.json --agent <N> \
+    --bind 0.0.0.0:47000 --start-at <START> --duration 180 \
+    --log logs/lt5/node-<N>.jsonl
+```
+
+| t after START | Action (record wall-clock time) |
+| --- | --- |
+| 0–30 s | connected baseline: do nothing |
+| 30 s | **cut:** switch Wi-Fi off on the hosts of one side (`sudo nmcli radio wifi off`), unplug their switch port, or apply the firewall rules from (b) |
+| 60 s | **reconnect:** reverse the cut |
+| 60–180 s | do nothing; the nodes stop by themselves |
+| optional, second run | at 60 s, power off one Pi instead of reconnecting (physical fail-stop) |
+
+Collect all `node-*.jsonl` on one machine, then run:
+
+```bash
+python -m eudis_swarm.field_report logs/lt5 --json logs/lt5/report.json \
+    --reconnect-at <reconnect wall-clock time, UNIX seconds>
+```
+
+**Pass** only if every condition holds:
+
+- Exit 0 with `field report: PASS`, and `mission complete YES`.
+- `divergent at reconnect` is non-empty.
+- Convergence after reconnect ≤ the bound (1.75 s). If the chrony offsets
+  exceed 50 ms, write down the convergence time with that uncertainty.
+- Every contest was won by the lowest ID, and `contest resolutions` lists no
+  other winner.
+- Every partition-era declaration was retracted after reconnect. Check that
+  `retractions` ≥ the number of distinct (declarer, peer) pairs.
+- In the fail-stop variant, every surviving host declared the powered-off
+  host, and the report shows no retraction for it.
+
+**Fail** on exit 1, `mission complete NO`, or a convergence time over the
+bound. **Inconclusive** (exit 2): repeat with a longer `--duration`, or fix
+the link first; LT6 shows how bad it is.
+
+### LT6 — measured link delivery
+
+**Equipment:** two hosts on the network that LT5 will use.
+
+```bash
+# host B (echo)
+python -m eudis_swarm.field_probe echo --bind 0.0.0.0:47100 --duration 600
+# host A (sender), once per position or separation
+python -m eudis_swarm.field_probe send --target <B-ip>:47100 \
+    --count 3000 --rate 20 --size 300 --output lt6-<position>.csv
+python -m eudis_swarm.field_probe summarize lt6-<position>.csv --json lt6-<position>.json
+```
+
+**Pass** (the measurement is valid) only if:
+
+- 3000 probes were sent;
+- the summary was produced;
+- the CSV and JSON are kept, with the position, distance and obstructions
+  written down for each.
+
+LT6 measures; it has no performance threshold. A round-trip delivery ratio
+below 0.9, or a p99 RTT above the 0.1 s heartbeat interval, predicts
+trouble for LT5's `peer_stale_after` and `heartbeat_timeout`. Record that
+next to the result rather than tuning the timing silently.
+
+**Record:** the CSV per position and the summary line for each. Claim only the
+measured environment.
 
 ## What this validates — and what it does not
 
@@ -344,6 +439,8 @@ that the losing claimant stands down.
 
 ## Results (localhost only)
 
+### Cloud VM, localhost UDP, 2026-10-02
+
 > **All numbers below come from loopback on one machine:** a 4-vCPU Linux VM
 > (kernel 6.18), Python 3.11.15, 2026-10-02. They show the software meets
 > its guarantee over a real UDP stack between real processes. They are not
@@ -390,6 +487,28 @@ How to read the table:
 - **Traffic.** 5,860-6,980 datagrams in total per 20 s run for 4 nodes,
   73-87/s per node. The highest figures are from the 30% loss runs. 90-97% of
   received protocol evidence was suppressed as duplicates.
+
+### Owner's laptop, localhost UDP, 2026-10-02
+
+These runs were made and reported by the session working on the owner's
+laptop (WSL2 Ubuntu, Python 3.11), on commit `c7b67cd`. The figures come from
+that session's report; I did not reproduce them. It also reported all 151
+field tests passing there.
+
+| Scenario (runs) | Report | Tasks | Convergence after heal | Other |
+| --- | --- | --- | --- | --- |
+| 2+2 partition, `--duration 15` (10) | 10/10 PASS | 4/4 every run | 7.1-15.9 ms | divergent at reconnect [3, 4] every run; 6-8 false declarations per run, all retracted on heal; 0 duplicates |
+| 2+2 partition + `--loss 0.2` (5) | 5/5 PASS | 4/4 | 8.3-9.1 ms | 0-4 false declarations; 0 duplicates |
+| fail-stop node 4, `--duration 15` (5) | PASS, but mission incomplete | 2/4 or 3/4 | — | the run is too short for lease expiry plus the 60 m recovery leg; this is why the report now prints `mission complete` and LT4 uses 40 s |
+| fail-stop node 4, `--duration 40` (5) | 5/5 PASS | 4/4 | — | fail-stop detected by all three survivors in 0.611-0.614 s; 0 duplicates |
+
+The laptop's fail-stop detection (≈0.61 s) is about 0.1 s slower than in the
+cloud VM runs (≈0.51 s). Both are within one heartbeat interval of
+`heartbeat_timeout` (0.6 s). Detection is measured from the logged fail-stop
+instant, and when that falls relative to the victim's last heartbeat differs
+between the hosts.
+
+### Other localhost measurements
 
 **Localhost link probe:** 2000 probes at 50 Hz, 300 B. Round-trip delivery was
 1.0. RTT p50 0.319 ms, p95 0.449 ms, p99 0.779 ms, max 7.995 ms. In

@@ -92,6 +92,7 @@ def test_four_processes_partition_heal_and_converge(tmp_path: Path) -> None:
     assert summary["convergence_s"] is not None
     assert summary["convergence_s"] <= summary["bound_s"]
     assert summary["tasks_completed"] == summary["tasks_total"] == 4
+    assert summary["mission_complete"] is True
     assert summary["retractions"]
     launcher = [
         json.loads(line) for line in (logs / "launcher.jsonl").read_text().splitlines()
