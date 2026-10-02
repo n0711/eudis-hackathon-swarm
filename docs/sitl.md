@@ -83,22 +83,33 @@ Against the contract specified before it was built:
    telemetry. It never substitutes the analytical prediction.
 2. **Met.** The adapter's only effect is `agent.position = vehicle.position`.
    It imports nothing from `task_claims.py`, `peer_state.py`, or `autonomy.py`.
-3. **Partly met.** A physically stopped (`responsive=False`) agent is never
+3. **Met (Phase 5).** A physically stopped (`responsive=False`) agent is never
    commanded or advanced here, and a merely *declared* failure does not stop
-   it — both tested. What is **not** built: the doc's own caveat that setting
-   `responsive=False` "cannot stop previously commanded motion" on a real
-   autopilot still holds. A UAV injected with a physical failure mid-flight
-   stops receiving new setpoints but keeps flying toward its last one; a
-   genuine fail-stop still needs the separate, safe SITL-only action
-   (e.g. commanding RTL or a loiter) this adapter does not send.
+   it — both tested. Setting `responsive=False` alone cannot stop motion a real
+   autopilot was already commanded into, so `MavlinkBackend.apply_physical_faults`
+   now sends a physically failed vehicle **exactly one** safe-hold mode change
+   — ArduCopter `BRAKE` (default) or `LOITER`, ArduRover `HOLD` — and records
+   it (`FailStopEvent`: mode, logical time, whether the autopilot confirmed it,
+   the vehicle clock and position just before the command). It reads only
+   `Agent.responsive`, never `Agent.status`, so a wrongly *declared* UAV keeps
+   flying; it is never repeated, even if the confirmation does not arrive.
+   `live_mission.InstrumentedSimulation` calls it immediately after the fault
+   schedule is applied, before anything else at that boundary. Measured:
+   the hold is a **stop command, not an instantaneous stop** — a copter at
+   cruise speed travels about 16-19 m in BRAKE before it is at rest (Phase 5).
 4. **Met.** Lock-step on `vehicle.vehicle_time_s`, never wall-clock; a stalled
    step raises `TimeoutError` rather than reporting a stale position as fresh.
+   Since Phase 5 the target is anchored (see "Time"), every report is pumped
+   fresh from a drained telemetry backlog, must be strictly newer than the
+   previous one, and its drift is recorded.
 5. **Met structurally, not by a runtime guard.** No CLI or `sweep.py` option
    selects a backend, so there is nothing for a runtime check to reject yet.
-   `MavlinkBackend` is reachable only from `scripts/sitl_mission_demo.py`,
-   never from `eudis_swarm.simulation`'s or `eudis_swarm.sweep`'s import graph
-   (enforced by `tests/test_mavlink_backend.py`, mirroring `test_sitl.py`'s
-   own check for `sitl.py`). If a backend-selection flag is ever added to
+   `MavlinkBackend` is reachable only from `scripts/sitl_mission_demo.py` and
+   the Phase 5 harness (`live_mission`, `sitl_swarm`, `live_report` and their
+   scripts), never from `eudis_swarm.simulation`'s or `eudis_swarm.sweep`'s
+   import graph (enforced by `tests/test_mavlink_backend.py` and
+   `tests/test_live_mission.py`, mirroring `test_sitl.py`'s own check for
+   `sitl.py`; none of the harness modules imports pymavlink at import time). If a backend-selection flag is ever added to
    either CLI, it must carry this guard explicitly.
 
 `tests/test_mavlink_backend.py` covers command/observation ordering, stale or
@@ -124,6 +135,25 @@ vehicles keep moving whether or not anything is asking. Two options:
 it bearable, and it raises after a hard wall-clock timeout per step so a
 stalled vehicle fails loudly rather than hanging. Free-running remains the
 better long-term answer and was deliberately not attempted first.
+
+**Anchored lock-step (Phase 5).** Several independent SITL processes stepped
+one after another keep running while the others are waited on. The original
+rule — wait until `last observed + elapsed` — rounded every step up to the
+next telemetry report, so its error accumulated (LT2 measured 1.6x). Now every
+vehicle is anchored once, in a single pass at the first integrated step (the
+telemetry backlog built up during takeoff is drained first, then every clock is
+read back to back), and each step waits only until
+`anchor + cumulative logical elapsed`. A vehicle already ahead is not waited
+on; its lead is recorded as `drift_s` on every step. The bound is one
+telemetry interval plus one poll (the stream rate is now a parameter,
+`--stream-rate`, default 10 Hz). What anchoring **cannot** do is slow a
+vehicle down: if one SITL instance runs faster than the others (CPU
+contention at a high `--speedup`), its drift grows and the log shows it. In
+one early run in the 4-vCPU cloud container (`--speedup 5`, before all anchors
+were set in one pass) one instance's clock advanced about 17 % more than
+another's over the mission and its drift grew to 3.3 s; after the fix, every
+recorded Phase 5 run at `--speedup 5` stayed under 0.71 s. Use a speedup every
+instance can sustain; the per-vehicle drift table in the report is the check.
 
 ## Environment on this machine
 
@@ -268,9 +298,247 @@ Two things the flight taught that the fakes could not:
 Evidence bundle: `evidence/20261002T040554Z-LT2` (see
 [`trl4_validation.md`](trl4_validation.md)).
 
-**Later — more than one.** Multiple SITL instances, distinct MAVLink ports.
-This is where it becomes expensive: process management, port allocation, and
-startup time per vehicle.
+**Phase 5 — a multi-vehicle swarm with a safe fail-stop.** *(done; flown in
+SITL, see below)* Every agent on live ArduPilot telemetry, copters and rovers
+in one mission, one vehicle physically failed mid-mission and put into a safe
+hold, its work recovered by the others through lease expiry.
+
+## Phase 5: a multi-vehicle swarm on live firmware
+
+### What was built
+
+| Piece | Where | What it does |
+| --- | --- | --- |
+| Anchored lock-step | `mavlink_backend.py` | One anchor per vehicle clock, set for all vehicles in one pass; each step waits only while a vehicle is behind `anchor + cumulative logical time`, pumps fresh telemetry, refuses a report not newer than the last, records drift. `synchronize()` steps hovering vehicles too. |
+| Safe fail-stop | `mavlink_backend.py`, `sitl.py` | `apply_physical_faults()` sends one `BRAKE`/`LOITER` (copter) or `HOLD` (rover) to a vehicle whose agent is physically non-responsive, never on a declaration; `SitlVehicle.set_mode`/`hold` confirm the mode from heartbeats. |
+| Shared frame | `sitl.py` | `SitlVehicle(origin=...)`: every vehicle reports in one mission frame, so one local metre is the same place for all of them and a task maps to one global point. Without `origin` a single vehicle still pins to its own first fix. |
+| Ground vehicles | `sitl.py`, `sitl_swarm.py` | `SitlVehicle.arm()` (GUIDED + arm, no takeoff; only the arm command's own ACK counts), `HOLD` as the rover's safe mode, per-class arrival tolerance. |
+| Evidence log | `live_mission.py` | `InstrumentedSimulation` observes a normal `Simulation` and writes JSON lines: header (config, vehicle types, safe modes, tolerances), one record per mission boundary (logical time; each agent's truth; each live vehicle's observed position, altitude, clock and drift; every receiver's ownership view of every task; events incl. `FAIL_STOP`), and a result record. On the point-mass backend it reproduces a plain `Simulation` exactly and its log is byte-identical between runs (tested). |
+| Report | `live_report.py`, `scripts/sitl_swarm_report.py` | Derives everything from the log alone: tasks, mission time, detection latency, orphaned tasks and recovery latency, concurrent ownership, minimum pairwise 3-D separation and steps below a threshold, per-vehicle drift, the observed hold (distance moved after the command, final speed). |
+| Launcher | `scripts/sitl-swarm.sh` | N instances (`-I i`, TCP `5760+10i`, sysid `i+1`), copters and/or rovers, each in its own directory, each starting at its agent's simulated start position about a shared origin; `stop`, `status`, `DRY_RUN=1`. |
+| Mission | `sitl_swarm.py`, `scripts/sitl_swarm_mission.py` | Connects N vehicles, checks each is at its simulated start, arms copters to layered altitudes and rovers on the ground, flies one distributed-control mission (all agents or `--live-agents`) with a scheduled physical failure and optional `--jammer`/`--comm-fault`, holds every vehicle if anything aborts, lands copters, writes the log, then flies the identical configuration on the point-mass backend and prints both side by side. |
+
+Definitions the report uses:
+
+- **Recovery latency after failure:** from the injected physical failure until
+  every task the failed UAV owned *in its own replica* at that moment is
+  `OWNED_BY_SELF` or `COMPLETE` in some surviving receiver's replica.
+- **Concurrent-ownership time:** the simulator's own evaluator metric
+  (task-seconds with more than one live owner across replicas).
+- **Min 3-D separation:** per step, the smallest east/north/altitude distance
+  between any two live vehicles as *observed* (held vehicles included);
+  reported with the pair, the time, and how many steps fell below
+  `--separation-threshold` (default 5 m).
+- **Drift:** vehicle seconds the vehicle's own clock was ahead of the logical
+  time it was stepped to. Never negative by construction.
+
+**Deconfliction is altitude layering.** Copter *k* (0-based, in agent order)
+takes off to and holds `--altitude + k * --altitude-step` (default 20, 25, 30,
+35 m); every later setpoint keeps that altitude, so crossing tracks never share
+an altitude. Rovers are on the ground and outside the layering. The separation
+metric is the evidence that it held.
+
+**Per-class arrival tolerance.** Copter 2.0 m (settles 1.4-2.0 m, phase 3;
+LT2 used 3.0 m with the single-vehicle demo). Rover 1.5 m, from a measured
+0.15-0.81 m settle over six legs
+([`data/sitl/rover_settle_2026-10-02.txt`](data/sitl/rover_settle_2026-10-02.txt)).
+The point-mass comparison run uses the same per-agent tolerances. A rover also
+drives far slower than the simulator's 10 m/s (about 2.8 m/s to within 3 m of
+a 20 m target); that is fine, since its motion comes from telemetry, but its
+legs take longer than the point-mass run predicts.
+
+### Results
+
+All runs below are **non-deterministic** SITL runs. They belong here, never in
+[`measured_results.md`](measured_results.md).
+
+**Owner's laptop, 2026-10-02, three fresh runs** (WSL2,
+`ArduPilot-4.6.0-beta1-7231-g7d2d454eba`, 4 x ArduCopter quad, `--speedup 5`,
+commit `b6471d9` as merged into the integration branch at `5d4cf88`;
+`scripts/sitl-swarm.sh 4 5`, then `scripts/sitl_swarm_mission.py --count 4`
+with defaults: 8 tasks, UAV 2 physically failed at t = 4.0 s, BRAKE). This is
+the LT3 record:
+
+| run | tasks | mission completed | failure detection | recovery after failure (point-mass) | max drift | fail-stop |
+| --- | --- | --- | --- | --- | --- | --- |
+| 1 | 8/8 | yes | 1.75 s | 6.75 s (2.50 s) | 0.451 s | UAV 2 BRAKE at 4.00 s confirmed; moved 16.5 m over 12.7 s; final 0.03 m/s |
+| 2 | 8/8 | yes | 1.75 s | 6.75 s (2.50 s) | 0.502 s | BRAKE confirmed; 15.7 m over 13.3 s; 0.03 m/s |
+| 3 | 8/8 | yes | 1.75 s | 7.25 s (2.50 s) | 0.450 s | BRAKE confirmed; 15.8 m over 12.8 s; 0.00 m/s |
+
+Takeoff altitudes 19.1 / 23.9 / 28.6 / 33.4 m (layering held); concurrent
+ownership 0.00 task-seconds in every run; about 26 s wall per run including
+arming and takeoff of all four.
+
+**Cloud development container, 2026-10-02** (4 vCPU Linux, ArduPilot `master`
+at `e8de77a` — ArduCopter / ArduRover V4.8.0-dev — built here with
+`./waf configure --board sitl && ./waf copter && ./waf rover`; commit
+`a96dad2`; `--speedup 5`; fresh instances every run; same defaults as above).
+Console output and the full JSONL evidence logs are in
+[`data/sitl/phase5/`](data/sitl/phase5/); re-derive any table with
+`python scripts/sitl_swarm_report.py docs/data/sitl/phase5/<run>.jsonl`.
+
+| run | vehicles | failure | tasks | mission time (point-mass) | detection | recovery (point-mass) | concurrent ownership (point-mass) | min 3-D separation | max drift | fail-stop |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `c5` | 4 copters | UAV 2 at 4 s | 8/8 | 14.25 s (8.50) | 1.75 s | 7.25 s (2.50) | 0.00 (0.00) | 14.6 m, 0/57 steps < 5 m | 0.700 s | BRAKE confirmed; 17.4 m over 10.2 s; 0.00 m/s |
+| `c5b` | 4 copters | UAV 2 at 4 s | 8/8 | 14.75 s (8.50) | 1.75 s | 7.00 s (2.50) | 0.00 (0.00) | 14.9 m, 0/59 | 0.600 s | BRAKE confirmed; 15.6 m over 11.0 s; 0.03 m/s |
+| `c5c` | 4 copters | UAV 2 at 4 s | 8/8 | 14.50 s (8.50) | 1.75 s | 7.25 s (2.50) | 0.00 (0.00) | 13.0 m, 0/58 | 0.652 s | BRAKE confirmed; 16.1 m over 10.4 s; 0.05 m/s |
+| `mix5` | 3 copters + 1 rover | rover (UAV 4) at 8 s | 8/8 | 16.00 s (8.50) | 1.75 s | 2.25 s (nothing orphaned) | 0.00 (0.00) | 17.0 m, 0/64 | 0.450 s | HOLD confirmed; 10.5 m over 8.3 s; 0.11 m/s |
+| `jam5` | 4 copters, jammer 50,50 r30 from 3 to 9 s | UAV 2 at 4 s | 8/8 | 15.50 s (7.75) | 5.00 s | 7.25 s (2.25) | 0.00 (1.50) | 15.2 m, 0/62 | 0.500 s | BRAKE confirmed; 15.7 m over 11.9 s; 0.03 m/s |
+
+Every run meets every pass criterion of the test card below. Copter takeoff
+altitudes were 19.0-19.1 / 23.8-23.9 / 28.5-28.6 / 33.3 m; wall time was
+24-27 s per run including arming and takeoff. Two cells need reading with
+care, and neither is a fault of the live run:
+
+- In `mix5` the point-mass rover had already finished its work when it
+  failed at 8 s (point-mass finishes the whole mission at 8.50 s), so there
+  was nothing to orphan or detect there; the live rover, slower, still owned
+  task 6. The recovery comparison is only like for like when both runs orphan
+  the same task, which the default (UAV 2 at 4 s) does.
+- In `jam5` the point-mass run shows 1.50 task-seconds of concurrent ownership
+  and no detection within its 7.75 s mission; the live run, with different
+  geometry under the jammer, shows none and a 5.00 s detection. These are two
+  different trajectories through the same protocol, not one result and its
+  error bar.
+
+The same mixed swarm was also flown at `--speedup 2` before the final commit
+(copter UAV 2 failed at 4 s: 8/8, 21.00 s, recovery 10.25 s, BRAKE confirmed,
+16.3 m to rest; min separation 14.4 m) with the same outcome.
+
+### What the flights taught that the fakes could not
+
+- **The safe hold is a stop command, not an instantaneous stop.** A copter
+  failed at cruise speed travels about 16-19 m in BRAKE before it is at rest
+  (final speeds 0.00-0.03 m/s); a rover in HOLD travelled 10.5 m. The
+  simulator's failed agent stops dead where it failed. The difference is real
+  separation the swarm does not know about; a deployment would need a margin
+  for it.
+- **Recovery takes longer on firmware than on the point-mass model** (about
+  6.75-7.25 s against 2.50 s on the laptop). Detection latency is identical
+  (1.75 s, it is protocol time); the gap is survivors' real flight time to the
+  orphaned task, including acceleration the point-mass model does not have
+  (phase 3).
+- **Instances do not all run at the speedup you ask for.** Under CPU
+  contention one instance can run faster than another; anchoring then records
+  a growing drift for it instead of hiding it. Pick a `--speedup` every
+  instance sustains, and check the drift table.
+- **The SITL binary exits when its parent process exits.** The launcher keeps
+  a small waiting parent per instance; starting the binary with `exec` from a
+  short-lived script made instances die on first connection.
+- **A telemetry backlog is the normal case with several vehicles.** Reading
+  one message returns the oldest; `SitlVehicle` now drains to the newest. The
+  first drain after a takeoff sequence takes about 0.5 s, which is why all
+  anchors are set in one pass after draining.
+
+### Lab run on WSL2 (exact commands)
+
+Prerequisites (once):
+
+```bash
+# WSL2 Ubuntu 22.04, ArduPilot checkout at ~/ardupilot
+cd ~/ardupilot && ./waf configure --board sitl && ./waf copter && ./waf rover
+# this repository, Python 3.11+
+cd ~/eudis-hackathon-swarm
+python3.11 -m venv .venv && source .venv/bin/activate
+python -m pip install -e ".[dev,sitl]"
+```
+
+Run (all in WSL; the mission script can also run on Windows with
+`--host <wsl-ip>`, see "Environment on this machine"):
+
+```bash
+# 1. start four copters (or: scripts/sitl-swarm.sh copter copter copter rover 5)
+RUN_DIR=/tmp/lt3 scripts/sitl-swarm.sh 4 5
+scripts/sitl-swarm.sh status            # RUN_DIR=/tmp/lt3 as above
+
+# 2. fly the mission and the point-mass comparison
+python scripts/sitl_swarm_mission.py --count 4 --log lt3-run1.jsonl \
+    | tee lt3-run1.txt
+#   mixed swarm: add  --vehicles copter,copter,copter,rover
+#   rover failure:    --failure-agent 4 --failure-time 8
+#   partition:        --jammer 50,50,30,3,9   or   --comm-fault 3,2,6
+
+# 3. stop every instance (fresh instances for every run)
+RUN_DIR=/tmp/lt3 scripts/sitl-swarm.sh stop
+
+# 4. later, anywhere: the comparison table from the log alone
+python scripts/sitl_swarm_report.py lt3-run1.jsonl
+```
+
+The launcher's `ORIGIN` and the mission's `--origin` must agree (both default
+to `35.1264,33.4299`); the mission aborts before arming if any vehicle is more
+than `--start-tolerance` (8 m) from its simulated start, which is what a
+mismatch looks like.
+
+### Test card: multi-vehicle mission with a physical fail-stop (LT3)
+
+**Purpose.** C1 + C2 + C4 together: every agent on live ArduPilot firmware,
+one vehicle physically failed mid-mission and put into a safe hold, its work
+recovered by the others through lease expiry, deconfliction evidenced.
+
+**Prerequisites.** As "Lab run" above; `pytest` green on the commit under test
+(LT1); nothing else heavy running (the drift check depends on it).
+
+**Steps.**
+
+1. `git rev-parse HEAD` — record the commit. `git status` must be clean.
+2. Start fresh instances: `RUN_DIR=/tmp/lt3 scripts/sitl-swarm.sh 4 5`.
+   Expected: four `started instance i (agent i+1, copter) on TCP 57x0` lines;
+   `status` shows four `running`.
+3. Run `python scripts/sitl_swarm_mission.py --count 4 --log lt3-runN.jsonl | tee lt3-runN.txt`.
+   Expected, in order: four `connecting` lines; four `airborne at` lines at
+   about 19, 24, 29, 33 m; `starting the live mission (NON-deterministic)`;
+   then the comparison table and the per-vehicle drift table; then
+   `evidence log: lt3-runN.jsonl`. About 30 s wall at speedup 5.
+4. Stop the instances: `RUN_DIR=/tmp/lt3 scripts/sitl-swarm.sh stop`.
+5. Repeat steps 2-4 for three runs in total, fresh instances each time.
+6. Optional variants, each recorded separately: mixed swarm
+   (`scripts/sitl-swarm.sh copter copter copter rover 5` and
+   `--vehicles copter,copter,copter,rover`); rover failure
+   (`--failure-agent 4 --failure-time 8`); a partition (`--jammer 50,50,30,3,9`).
+7. Bundle the evidence:
+   `python scripts/collect_evidence.py LT3 --result PASS|FAIL --note "..." --attach lt3-run*.jsonl lt3-run*.txt`.
+
+**Record** for each run: the commit, ArduPilot version (first lines of
+`/tmp/lt3/inst0/sitl.log`), speedup, the full table, the drift table, the
+fail-stop cell, and the min-separation cell.
+
+**Pass criteria — every run must show all of:**
+
+| # | Criterion | Where it shows |
+| --- | --- | --- |
+| P1 | Every task completed and the mission completed | `Tasks completed 8/8`, `Mission completed yes` (sitl column) |
+| P2 | The failure was physical and the fail-stop was sent once and confirmed | `Fail-stop: UAV 2 BRAKE at 4.00 s (confirmed ...)`, exactly one entry |
+| P3 | The failed vehicle actually stopped | the same cell's final speed < 0.5 m/s |
+| P4 | Its work was recovered by the survivors | `Recovery latency after failure` is a time, not `NOT recovered` |
+| P5 | No duplicate ownership | `Concurrent-ownership time 0.00 task-s` |
+| P6 | Deconfliction held | `Min 3-D separation`: `0/... steps < 5 m` |
+| P7 | Lock-step stayed honest | every vehicle's max drift < 1.0 s in the drift table |
+| P8 | The deterministic baseline is unchanged | point-mass column: 8/8, 8.50 s, recovery 2.50 s |
+
+**Fail** if any criterion fails in any run; record the run anyway with its
+cause (a failed run with a recorded cause is evidence too). P7 failing alone
+with everything else passing usually means the machine could not sustain the
+speedup: rerun at a lower `--speedup` and say so. If the mission aborts, every
+vehicle is put into BRAKE (copters) or HOLD (rovers) before the error is
+printed; that is the expected abort behaviour, not a pass.
+
+**Limits to state with the result.** SITL is firmware on a simulated
+airframe, not flight. The radio, jammer and failure are the simulator's models.
+Live numbers are non-deterministic and are not measured results.
+
+### Integration notes
+
+- `docs/trl4_validation.md` LT3 points here; the test card above is that
+  procedure, and the laptop runs above are its first record.
+- `VehicleTelemetry` gained `hold(mode)`; any fake or adapter passed to
+  `MavlinkBackend` (e.g. `tests/test_field_node.py`) needs it.
+- The evidence-log schema is version 2 (vehicle types, safe modes,
+  tolerances, altitude); `live_report` refuses a log of another version.
+- Not done: free-running (non-lock-step) time; a calibrated motion model for
+  the communication-only projection (still point-mass); real RF; hardware.
+- README, CHANGELOG and milestones are deliberately untouched by this work;
+  their summaries should be updated when this branch is integrated.
 
 ## Honest assessment
 
@@ -284,13 +552,15 @@ Phase 1 is worth doing regardless: it removes a duplicated motion model and
 names a distinction the code was blurring.
 
 Phase 4 closes the specific gap Phase 2/3 left open: real firmware's telemetry
-has driven one agent through an actual coordination mission to completion. Say
-what it is — one vehicle, SITL not flight, a measured clock drift until the
-anchored lock-step lands — and that it does not yet model a true fail-stop on a
-real vehicle (see point 3 above), rather than letting the distributed-failure
-story imply it does.
+has driven one agent through an actual coordination mission to completion.
 
-Several SITL instances add process management, port allocation, and startup
-time; multi-vehicle SITL stays out of scope for this hackathon. Keep the
-deterministic simulator as the primary demonstration and use the one-vehicle
-integration, once actually flown, as a second, narrower proof point.
+Phase 5 closes the rest of the integration gap: the whole swarm on live
+firmware, with a real fail-stop, flown repeatedly on two machines (Phase 5
+results above). Say what it is: **SITL, not flight** — real autopilot firmware
+on a simulated airframe; logical time lock-stepped to each vehicle's own clock;
+the radio, the jammer and the failure are still the simulator's models, not RF
+or hardware. The coordination numbers it produces are **non-deterministic** and
+live here, never in [`measured_results.md`](measured_results.md). The
+deterministic simulator stays the primary demonstration; the Phase 5 mission
+is the evidence that the same coordination logic holds when the motion comes
+from ArduPilot rather than from the point-mass model.

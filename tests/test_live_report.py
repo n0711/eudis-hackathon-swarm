@@ -305,3 +305,32 @@ def test_the_live_table_reports_separation_and_types() -> None:
     assert baseline.min_separation_m is None
     assert "| Min 3-D separation (live) | n/a |" in format_comparison([baseline])
     assert "| Vehicle types | n/a |" in format_comparison([baseline])
+
+
+RECORDED = Path(__file__).resolve().parents[1] / "docs" / "data" / "sitl" / "phase5"
+
+
+@pytest.mark.parametrize("run", ["c5", "c5b", "c5c", "mix5", "jam5"])
+def test_the_recorded_phase5_flights_still_meet_the_test_card(run: str) -> None:
+    """docs/sitl.md cites these logs; the report must keep reading them.
+
+    Real ArduPilot SITL runs, recorded once. The numbers are not
+    reproducible, so this pins only the pass criteria the doc claims.
+    """
+
+    from eudis_swarm.live_mission import read_jsonl
+
+    with (RECORDED / f"{run}.jsonl").open(encoding="utf-8") as stream:
+        live, baseline = summarize(read_jsonl(stream))
+
+    assert not live.deterministic and baseline.deterministic
+    assert live.mission_completed and live.completed_task_count == 8  # P1
+    (fail_stop,) = live.fail_stops  # P2: exactly one
+    assert fail_stop.confirmed
+    assert fail_stop.residual_speed_mps is not None
+    assert fail_stop.residual_speed_mps < 0.5  # P3
+    assert live.recovered  # P4
+    assert live.concurrent_ownership_task_s == 0.0  # P5
+    assert live.steps_below_separation == 0  # P6
+    assert max(v.max_drift_s for v in live.vehicles) < 1.0  # P7
+    assert baseline.completed_task_count == 8  # P8

@@ -1,0 +1,43 @@
+UAV 1: connecting to tcp:127.0.0.1:5760 ...
+UAV 2: connecting to tcp:127.0.0.1:5770 ...
+UAV 3: connecting to tcp:127.0.0.1:5780 ...
+UAV 4: connecting to tcp:127.0.0.1:5790 ...
+UAV 1: arming, takeoff to 20 m ...
+UAV 1: airborne at 19.1 m
+UAV 2: arming, takeoff to 25 m ...
+UAV 2: airborne at 23.9 m
+UAV 3: arming, takeoff to 30 m ...
+UAV 3: airborne at 28.5 m
+UGV 4 (rover): arming in GUIDED ...
+UGV 4: armed on the ground
+starting the live mission (NON-deterministic)
+
+| | sitl (NON-deterministic) | point-mass (deterministic) |
+| --- | ---: | ---: |
+| Backend | mavlink | point-mass |
+| Live-telemetry agents | 1, 2, 3, 4 | none |
+| Vehicle types | 1:copter, 2:copter, 3:copter, 4:rover | 1:copter, 2:copter, 3:copter, 4:rover |
+| Tasks completed | 8/8 | 8/8 |
+| Mission completed | yes | yes |
+| Mission time (logical) | 16.00 s | 8.50 s |
+| Physical failure | UAV 4 at 8.00 s | UAV 4 at 8.00 s |
+| Failure detection latency | 1.75 s | n/a |
+| Orphaned tasks | 6 | none |
+| Recovery latency after failure | 2.25 s | nothing orphaned |
+| Concurrent-ownership time | 0.00 task-s | 0.00 task-s |
+| Min 3-D separation (live) | 17.0 m (UAV 1-3 at 8.75 s); 0/64 steps < 5 m | n/a |
+| Max lock-step drift (vehicle ahead) | 0.450 s | n/a |
+| Fail-stop | UAV 4 HOLD at 8.00 s (confirmed, moved 10.5 m over 8.3 s after, final speed 0.11 m/s) | n/a |
+
+NON-deterministic: a live-telemetry run is not reproducible. Record it in docs/sitl.md, never in docs/measured_results.md.
+
+sitl: lock-step per vehicle
+| UAV | steps | max drift | mean drift | max wait (wall) |
+| ---: | ---: | ---: | ---: | ---: |
+| 1 | 64 | 0.450 s | 0.159 s | 0.524 s |
+| 2 | 64 | 0.400 s | 0.168 s | 0.096 s |
+| 3 | 64 | 0.399 s | 0.173 s | 0.070 s |
+| 4 | 32 | 0.450 s | 0.200 s | 0.007 s |
+
+evidence log: /tmp/claude-0/runs/mix5.jsonl
+wall 24 s
