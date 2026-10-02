@@ -44,7 +44,7 @@ processes over a real network.
 | Distributed task allocation | receiver-local utility → claim before binding → leases → deterministic reconciliation; centralized allocator kept only as a comparison baseline | 440-run study: central control failed 68 missions, distributed none; preliminary LT4 runs: a real split brain on every partition run, resolved after heal with the loser standing down | done |
 | Coordinated motion and deconfliction | none in the 2-D simulator; altitude layering per vehicle plus a measured minimum separation in the multi-vehicle SITL mission | multi-vehicle SITL test card (LT3) | **gap in simulation**; in progress for SITL |
 | Shared situational awareness | each UAV keeps its own evidence-based view: peer freshness and status from delivered heartbeats; ISR observations; accepted inspection objectives shared by description gossip. There is deliberately no single shared map — awareness is per receiver | [`distributed_state_foundation.md`](distributed_state_foundation.md); [`observation_integration.md`](observation_integration.md) | done, per-receiver by design |
-| Coordinated search | not implemented: no area-coverage or exploration behaviour; the task catalogue is preloaded or discovered from observations | [`exploration_reference.md`](exploration_reference.md) records the design boundary | **gap** |
+| Coordinated search | the area is cut into sectors that are allocated, leased and reconciled by the existing protocol; coverage over time is measured by the observer | [`search_mission.md`](search_mission.md): 64 paired runs — under jamming the distributed search covered every sector in 16/16 runs, the central coordinator in 14/16; with clean links the central coordinator is 0.8 s faster | done for sector coverage; no sensor or detection-probability model |
 | Target hand-off | an accepted inspection objective survives the loss of the UAV that observed it and is completed by another UAV that never saw the target | relay-recovery scenario: 3/3 with description sharing vs 2/3 without ([`demo_runbook.md`](demo_runbook.md)) | done (synthetic observations) |
 | Vehicle-agnostic | coordination never imports vehicle code; motion goes through `VehicleBackend`; `MavlinkBackend` drives any ArduPilot vehicle in GUIDED | LT2: ArduCopter SITL in a coordination mission; ArduRover SITL follows the same setpoints, settle 0.15–0.81 m ([`data/sitl/rover_settle_2026-10-02.txt`](data/sitl/rover_settle_2026-10-02.txt)) | done for ArduPilot; mixed copter + rover mission in progress; PX4 not supported |
 | Single operator, command by intent | the contract is intent (what matters, what floor, what to do when degraded), never a per-vehicle plan; it propagates as evidence, so a partition splits intent exactly as it splits everything else | `mission_contract.py`, milestone 5 | done; there is no operator user interface |
@@ -52,9 +52,10 @@ processes over a real network.
 
 ## Gaps, stated plainly
 
-- **Coordinated search** is the largest missing mission behaviour. The honest
-  description is "task allocation and hand-off over a known or discovered set of
-  objectives", not "search".
+- **Coordinated search** is sector coverage: a sector counts as searched when
+  its centre is reached. There is no sensor footprint or probability of
+  detection, and detections during a search do not yet create inspection tasks
+  (hand-off is demonstrated separately).
 - **Deconfliction** exists only as altitude layering in the live SITL mission;
   the simulator's point-mass vehicles can share airspace.
 - **PX4** vehicles use OFFBOARD rather than GUIDED and are not supported by the
