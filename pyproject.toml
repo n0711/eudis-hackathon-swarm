@@ -60,6 +60,11 @@ eudis-swarm-generalization = "eudis_swarm.generalization:main"
 eudis-swarm-observation-replay = "eudis_swarm.observation_replay:main"
 eudis-swarm-robustness = "eudis_swarm.robustness:main"
 eudis-swarm-search = "eudis_swarm.search_mission:main"
+# Lab field node (real UDP between processes/hosts; not deterministic).
+eudis-field-node = "eudis_swarm.field_node:main"
+eudis-field-launch = "eudis_swarm.field_launch:main"
+eudis-field-report = "eudis_swarm.field_report:main"
+eudis-field-probe = "eudis_swarm.field_probe:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
