@@ -359,7 +359,7 @@ freshness 0.75 s, rebroadcast 0.25 s, settle 0.15 s, speed 4 m/s, and
 | 2+2 partition 3-8 s (5) | 5/5 PASS | 9.3-12.8 ms | ≤ 2.9 ms | tasks 3, 4 in every run | 8.51-8.52 s, all inside the partition window | 10/10, 10/10 | 4/4, 0 | 12.61-12.62 s |
 | 2+2 partition + `--loss 0.2` (3) | 3/3 PASS | 11.3-12.5 ms | ≤ 4.7 ms | tasks 3, 4 in every run | 8.51-8.52 s, all inside the partition window | 6/6, 6/6 | 4/4, 0 | 12.61-12.63 s |
 | no partition, `--loss 0.3` (3) | 3/3 PASS | no partition | 0 ms | none | 0 s | none needed | 4/4, 0 | 14.98-15.01 s |
-| fail-stop node 4 at 4 s (3) | 3/3 PASS | no partition | ≤ 4.0 ms | none | ≤ 2.5 ms (simultaneous re-claim, resolved) | 2/2 | 4/4, 0 | 15.42-15.43 s |
+| fail-stop node 4 at 4 s (3) | 3/3 PASS | no partition | ≤ 4.0 ms | none | ≤ 2.5 ms (simultaneous re-claim, resolved) | 2/2, loser had not bound yet | 4/4, 0 | 15.42-15.43 s |
 
 How to read the table:
 

@@ -429,9 +429,7 @@ def evaluate(
     summary["tasks_completed"] = len(completers)
     summary["completion_events"] = len(completions)
     summary["duplicate_completions"] = duplicates
-    summary["last_completion_s"] = (
-        rel(completions[-1]["wall"]) if completions else None
-    )
+    summary["last_completion_s"] = rel(completions[-1]["wall"]) if completions else None
 
     final_views = {
         log.node: log.records[-1]
