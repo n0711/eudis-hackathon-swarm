@@ -9,6 +9,9 @@ document that assumes you know nothing.
 | --- | --- |
 | Get running and find your way around | [`onboarding.md`](onboarding.md) |
 | Rehearse the current hackathon demonstration | [`demo_runbook.md`](demo_runbook.md) |
+| See how each Challenge 2 requirement is covered, and what is missing | [`challenge2_coverage.md`](challenge2_coverage.md) |
+| Check the TRL4 claim, run a lab test card, or read the evidence log | [`trl4_validation.md`](trl4_validation.md) |
+| Run or read about coordinated area search | [`search_mission.md`](search_mission.md) |
 | Replay synthetic ISR observations and inspect the integration boundary | [`observation_integration.md`](observation_integration.md) |
 | Know what has actually been measured, and what has not | [`measured_results.md`](measured_results.md) |
 | Inspect the paired fleet/network comparison and raw data | [`generalization_study.md`](generalization_study.md) |
@@ -18,6 +21,7 @@ document that assumes you know nothing.
 | Know why the problem is real, with citations | [`threat_context.md`](threat_context.md) |
 | Pick up the vehicle dynamics and energy work | [`vehicle_model.md`](vehicle_model.md) |
 | Run the standalone SITL experiment and see the integration plan | [`sitl.md`](sitl.md) |
+| Run the protocol as real processes over UDP (lab TRL4 evidence) | [`field_node.md`](field_node.md) |
 | See how the project got here | [`milestones.md`](milestones.md) |
 | Compare against published research and industry | [`prior_art.md`](prior_art.md) |
 | Understand the supplied IN424 exploration material | [`exploration_reference.md`](exploration_reference.md) |

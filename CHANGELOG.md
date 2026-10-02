@@ -8,14 +8,36 @@ and interfaces change between prototypes.
 ## [Unreleased]
 
 ### Added
+- Coordinated area search (`eudis-swarm-search`, `search_mission.py`): the
+  area is cut into lawnmower-ordered sectors that the existing claim protocol
+  allocates; the observer measures coverage over time from mission events. A
+  64-run paired study (`docs/search_mission.md`, raw CSV in `docs/data/`):
+  with clean links the central coordinator reaches full coverage 0.8 s sooner
+  on average; under jamming it leaves a sector unsearched in 2 of 16 runs,
+  while the distributed search covers every sector in all 16, at the cost of
+  67 redundant sector searches against 27.
+- `docs/challenge2_coverage.md`: each Challenge 2 requirement (official and
+  Cyprus-edition text) mapped to code, evidence and gaps.
+- `docs/trl4_validation.md`: the readiness scale used, per-component status,
+  the criteria under which a TRL4 claim is justified, seven laboratory test
+  cards for equipment day, and an evidence log to be filled only from
+  observed runs.
+- Scheduled ISR observation publications inside `Simulation`: fresh, confident
+  tracks with explicit mission coordinates make a bounded stationary inspection
+  task eligible for the receivers that actually got them, and accepted
+  objectives are shared by description gossip so the work survives the loss of
+  the observing UAV (`python -m eudis_swarm.observation_demo`, paired
+  relay-recovery scenario: 3/3 with sharing, 2/3 without; synthetic data).
 - `MavlinkBackend` (`src/eudis_swarm/mavlink_backend.py`): a `VehicleBackend`
   adapter that drives one agent's physical motion from live `SitlVehicle`
   telemetry inside an otherwise normal `Simulation` mission, lock-stepped on
   the vehicle's own clock with a hard wall-clock timeout per step. Every other
   agent still moves through `PointMassBackend`, unchanged. Fully covered by
-  `tests/test_mavlink_backend.py` against a fake vehicle; not yet run against
-  a live ArduPilot instance (see `docs/sitl.md`). `scripts/sitl_mission_demo.py`
-  runs it against a real SITL connection.
+  `tests/test_mavlink_backend.py` against a fake vehicle.
+  `scripts/sitl_mission_demo.py` runs it against a real SITL connection; one
+  ArduCopter SITL vehicle has flown that mission to completion (LT2 in
+  `docs/trl4_validation.md`, with a measured 1.6x vehicle-vs-logical clock
+  drift caused by 5 Hz telemetry quantising each lock-step).
 - A standalone version-1 JSONL observation replay with isolated receiver views,
   source/track timeouts, explicit empty scenes, and two-source sample data.
   It does not connect perception to `Simulation` task creation or movement.
@@ -369,6 +391,10 @@ and interfaces change between prototypes.
 
 ### Removed
 
+- The Streamlit trace dashboard (`eudis-swarm-dashboard`, the `dashboard`
+  extra) and its viewer-only modules. Traces are still recorded as JSON with
+  `--record-trace`; the demo runbook now uses console output only. The full
+  optional install is `.[dev]` (plus `.[sitl]` or `.[charts]` as needed).
 - The legacy `--visualize` matplotlib final-frame view, its
   `src/eudis_swarm/visualization.py` module, and the `visualization` optional
   extra. It drew one static frame and was superseded by the trace-playback

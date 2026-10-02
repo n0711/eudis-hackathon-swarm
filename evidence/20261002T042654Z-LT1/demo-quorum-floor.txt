@@ -1,0 +1,75 @@
+[MISSION] Mission started with 2 agents and 3 tasks
+[NETWORK] Network initially connected with 1 links
+[CLAIM] UAV 1 may execute Task 3 after local ownership resolution
+[CLAIM] UAV 2 may execute Task 2 after local ownership resolution
+[TASK] UAV 1 completed Task 3
+[CLAIM] UAV 1 may execute Task 1 after local ownership resolution
+[FAULT] Injecting failure into UAV 2 at t=4.00s
+[TASK] UAV 1 completed Task 1
+[PEER] UAV 1 state for UAV 2 became STALE at t=5.75s
+[CLAIM] UAV 1 may execute Task 2 after local ownership resolution
+[TASK] UAV 1 completed Task 2
+[MISSION] Mission completed at t=10.75s
+
+PROTOTYPE 0.1 RESULT
+
+Mission completed: YES
+Tasks completed: 3 / 3
+Agents started: 2
+Agents physically lost: 1
+Agents declared failed: 0
+Losses never detected: 1
+Orphaned tasks: 0
+Tasks reassigned: 0
+Recovered tasks: 0
+Belief divergences: 0
+Declarations retracted: 0
+Contested tasks yielded: 0
+Redundant completions: 0
+Simulation duration: 10.75 s
+Failure detection latency: N/A
+Task reassignment latency: N/A
+Human interventions: 0
+
+WASTED AND ABANDONED WORK (evaluator-computed ground truth;
+no UAV can observe these)
+Concurrent ownership: 0.00 task-seconds
+Abandoned task time: 2.75 task-seconds (includes never-started backlog)
+Dropped-ownership time: 0.00 task-seconds
+Contested duration: 0.00 task-seconds
+
+NETWORK (PROTOTYPE 0.2A)
+Initial communication links: 1
+Minimum communication links: 1
+Maximum connected components: 1
+Isolation events: 0
+Link-loss events: 0
+Link-restoration events: 0
+Communication-degraded duration: 0.00 s
+Network ended connected: YES
+Healthy but unreachable UAV events: 0
+
+PEER STATE (PROTOTYPE 0.2B)
+Messages attempted: 15
+Messages delivered: 8
+Messages undelivered: 7
+Peer stale transitions: 1
+Peer refresh transitions: 0
+Maximum simultaneous stale observations: 1
+
+PROTOCOL GOSSIP
+Logical forwarding attempts: 11
+Successful first deliveries: 11
+Unavailable-link attempts: 0
+Useful first deliveries: 11
+Forwarded first deliveries: 0
+Duplicate source publications: 129
+Duplicate routes suppressed: 11
+Inactive-endpoint deferrals: 28
+
+ALLOCATION (PROTOTYPE 0.3A)
+Allocation policy: distance
+Connectivity-aware assignments: 0
+Assignments predicting isolation: 0
+Mean predicted peer degree: N/A
+Minimum predicted peer degree: N/A

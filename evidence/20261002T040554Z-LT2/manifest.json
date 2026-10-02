@@ -1,0 +1,17 @@
+{
+  "artefacts_sha256": {
+    "lt2-console.txt": "88f4406e61e1a270881b23995a933adf266ae3dfeabd147cfefff2816a24da3a",
+    "lt2-drift-probe.txt": "8e66ed1d9e103039d3a0149ec32f0d0a666ecea9e9b6e7714d7a4c44460d2fa5",
+    "lt2_drift_probe.py": "80570515209b1c78fd044c2ab6639858a787d90d4e5b237989eebca29f06e25d"
+  },
+  "commit": "7c8a0fb492d7e8cf0fdc9ceec0376587263b1413",
+  "failures": [],
+  "host": "omenhp",
+  "note": "ArduCopter SITL (ArduPilot-4.6.0-beta1-7231-g7d2d454eba), quad, --speedup 5, fresh start, local WSL2 on omenhp; scripts/sitl_mission_demo.py tcp:127.0.0.1:5760; 2/2 tasks, 4.50 logical s, 12 s wall incl. arm/takeoff. Known limit measured on the same commit: vehicle clock ran 1.6x logical time (7.20 s vs 4.50 s over 18 steps) because 5 Hz telemetry quantises each 0.25 s lock-step to 0.40 s; anchored lock-step fix in progress.",
+  "platform": "Linux-6.18.33.2-microsoft-standard-WSL2-x86_64-with-glibc2.35",
+  "python": "3.11.0rc1",
+  "recorded_at_utc": "20261002T040554Z",
+  "result": "PASS",
+  "test_id": "LT2",
+  "working_tree_clean": true
+}

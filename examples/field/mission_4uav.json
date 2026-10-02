@@ -1,0 +1,31 @@
+{
+  "format": "eudis-field-mission",
+  "version": 1,
+  "mission_id": "lab-4uav",
+  "description": "Four UAVs in two pairs, 100 m apart. Agents 1-2 finish short tasks quickly; agents 3-4 fly long legs. A 2+2 partition makes 1-2 see 3-4's leases expire and re-claim their tasks: a genuine split brain that reconciliation must resolve after the heal.",
+  "speed": 4.0,
+  "completion_tolerance": 0.5,
+  "agents": [
+    {"id": 1, "start": [0.0, 0.0], "address": "127.0.0.1:47001"},
+    {"id": 2, "start": [0.0, 20.0], "address": "127.0.0.1:47002"},
+    {"id": 3, "start": [100.0, 0.0], "address": "127.0.0.1:47003"},
+    {"id": 4, "start": [100.0, 20.0], "address": "127.0.0.1:47004"}
+  ],
+  "tasks": [
+    {"id": 1, "position": [5.0, 0.0]},
+    {"id": 2, "position": [5.0, 20.0]},
+    {"id": 3, "position": [40.0, 0.0]},
+    {"id": 4, "position": [40.0, 20.0]}
+  ],
+  "timing": {
+    "heartbeat_interval": 0.1,
+    "peer_stale_after": 0.5,
+    "heartbeat_timeout": 0.6,
+    "lease_timeout": 1.5,
+    "freshness_timeout": 0.75,
+    "round_interval": 0.05,
+    "rebroadcast_interval": 0.25,
+    "claim_settle": 0.15
+  },
+  "network": {"mode": "unicast"}
+}

@@ -1,0 +1,17 @@
+{
+  "artefacts_sha256": {
+    "baseline-quorum-floor.txt": "9bbf4e5204a0cc76df56491ff2999da822ac31d7b5d6cd5c87f9f1fc761e32a4",
+    "demo-quorum-floor.txt": "2a6c3aa78a83f3ca71cbdb1bc10b4bf61e4398bbdcd205ac0c9df004d3e5347d",
+    "pytest.txt": "03e7bcc32b2c5a729abf94345fa0def9d9393f6e74fdc8565d3c69f9e514ae17"
+  },
+  "commit": "272d032da3a4839ed02416585dfe84a840f5a53b",
+  "failures": [],
+  "host": "omenhp",
+  "note": "deterministic baseline on the commit that records LT2",
+  "platform": "Linux-6.18.33.2-microsoft-standard-WSL2-x86_64-with-glibc2.35",
+  "python": "3.11.0rc1",
+  "recorded_at_utc": "20261002T042654Z",
+  "result": "PASS",
+  "test_id": "LT1",
+  "working_tree_clean": true
+}

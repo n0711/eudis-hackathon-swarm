@@ -72,18 +72,23 @@ limits: [`docs/measured_results.md`](docs/measured_results.md).
 
 The working demonstration is a **deterministic two-dimensional simulation** of
 receiver-local task ownership under communication loss. It includes a point-mass
-`VehicleBackend`, paired centralized comparisons, a recorded-trace dashboard,
-and a separate one-vehicle ArduPilot SITL experiment. A `MavlinkBackend` adapter
+`VehicleBackend`, paired centralized comparisons, recorded JSON traces, and a
+separate one-vehicle ArduPilot SITL experiment. A `MavlinkBackend` adapter
 can now route one agent's motion through live SITL telemetry inside an actual
-coordination mission ([`docs/sitl.md`](docs/sitl.md)) — implemented and tested,
-but not yet run against a live autopilot. It does **not** yet include live
-perception observations, exploration mapping, relay positioning, flight safety
-supervision, or SITL-controlled *swarm* missions (multiple vehicles at once).
-For a short demonstration use the [runbook](docs/demo_runbook.md); for planned
-perception input see the
-[observation replay boundary](docs/observation_integration.md). A standalone
-two-source JSONL replay now validates and ages receiver-local observations; it
-does not yet deliver them through `Simulation` or create mission tasks.
+coordination mission ([`docs/sitl.md`](docs/sitl.md)); one ArduCopter SITL
+vehicle has flown such a mission to completion (LT2 in
+[`docs/trl4_validation.md`](docs/trl4_validation.md), with its measured limits). Scheduled ISR observation
+publications (synthetic JSONL with explicit mission coordinates) can make a
+bounded stationary inspection task eligible for the receivers that actually got
+the observation, and accepted objectives are shared by description gossip so
+the work survives the loss of the UAV that saw it
+([`docs/observation_integration.md`](docs/observation_integration.md)).
+It does **not** yet include live perception input, exploration mapping, relay
+positioning, flight safety supervision, or physical flight. For a short
+demonstration use the [runbook](docs/demo_runbook.md); the laboratory evidence
+toward TRL4 is tracked in [`docs/trl4_validation.md`](docs/trl4_validation.md),
+and each Challenge 2 requirement is mapped to code, evidence and gaps in
+[`docs/challenge2_coverage.md`](docs/challenge2_coverage.md).
 
 ## EUDIS Challenge
 
