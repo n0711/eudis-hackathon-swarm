@@ -431,10 +431,6 @@ class FieldNode:
                 f"heartbeat of {heartbeat.agent_id} sent by {sender}",
             )
             return
-        if heartbeat.agent_id not in self.peer_store.peer_agent_ids:
-            self.counters.heartbeats_rejected += 1
-            self._reject("unknown_heartbeat", received_at, str(heartbeat.agent_id))
-            return
         previous = self.peer_store.observation_for(heartbeat.agent_id)
         if previous is not None and heartbeat.timestamp < previous.snapshot.timestamp:
             # UDP may reorder; an older snapshot is simply superseded.

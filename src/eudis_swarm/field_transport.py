@@ -56,8 +56,8 @@ Address: TypeAlias = tuple[str, int]
 MessageId: TypeAlias = tuple[Any, ...]
 
 
-def parse_address(text: str) -> Address:
-    """Parse ``host:port`` into a socket address."""
+def parse_address(text: str, *, allow_ephemeral: bool = False) -> Address:
+    """Parse ``host:port`` into a socket address (port 0 only if allowed)."""
 
     host, separator, port_text = text.rpartition(":")
     if not separator or not host:
@@ -66,7 +66,7 @@ def parse_address(text: str) -> Address:
         port = int(port_text)
     except ValueError:
         raise ValueError(f"address port must be an integer, got {text!r}") from None
-    if not 0 < port < 65536:
+    if not (0 if allow_ephemeral else 1) <= port < 65536:
         raise ValueError(f"address port must be in 1..65535, got {text!r}")
     return (host, port)
 
