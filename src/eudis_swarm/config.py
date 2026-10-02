@@ -73,9 +73,21 @@ class SimulationConfig:
     peer_state_stale_after: float = 2.5
 
     # --- control model ---
-    #: Scoring policy for task selection: "distance" (nearest) or
-    #: "connectivity" (prefer tasks that keep predicted peer degree up).
+    #: Scoring policy for task selection: "distance" (nearest),
+    #: "connectivity" (prefer tasks that keep predicted peer degree up), or
+    #: "quantum" (each idle UAV solves a small joint assignment over itself and
+    #: its HEARD peers with a simulated quantum solver; see quantum_opt.py).
     allocation_policy: str = "distance"
+    #: With allocation_policy="quantum": "qaoa" (statevector QAOA) or "sqa"
+    #: (simulated quantum annealing).
+    quantum_solver: str = "qaoa"
+    #: With allocation_policy="quantum": most UAVs in one formulation (self
+    #: plus the nearest idle HEARD peers) and most objectives (the nearest
+    #: claimable ones). The defaults give at most 9 qubits.
+    quantum_max_agents: int = 3
+    quantum_max_objectives: int = 3
+    #: QAOA depth p for quantum_solver="qaoa".
+    qaoa_depth: int = 2
     #: "distributed" replicated claim ownership (the operational model), or
     #: "centralized" -- the single-coordinator comparison baseline.
     task_control: str = "distributed"
@@ -136,8 +148,37 @@ class SimulationConfig:
             validate_positive_integer(
                 self.comm_fault_agent_id, name="comm_fault_agent_id"
             )
-        if self.allocation_policy not in {"distance", "connectivity"}:
-            raise ValueError("allocation_policy must be 'distance' or 'connectivity'")
+        if self.allocation_policy not in {"distance", "connectivity", "quantum"}:
+            raise ValueError(
+                "allocation_policy must be 'distance', 'connectivity' or 'quantum'"
+            )
+        if self.quantum_solver not in {"qaoa", "sqa"}:
+            raise ValueError("quantum_solver must be 'qaoa' or 'sqa'")
+        validate_positive_integer(self.quantum_max_agents, name="quantum_max_agents")
+        validate_positive_integer(
+            self.quantum_max_objectives, name="quantum_max_objectives"
+        )
+        if not isinstance(self.qaoa_depth, int) or isinstance(self.qaoa_depth, bool):
+            raise ValueError("qaoa_depth must be an integer")
+        if not 1 <= self.qaoa_depth <= 4:
+            raise ValueError("qaoa_depth must be between 1 and 4")
+        if self.allocation_policy == "quantum":
+            # Bounds: the statevector simulator's qubit limit, and a solve
+            # budget that keeps a run interactive.
+            qubits = self.quantum_max_agents * self.quantum_max_objectives
+            if self.quantum_solver == "qaoa" and qubits > 16:
+                raise ValueError(
+                    "quantum_max_agents * quantum_max_objectives must be <= 16 "
+                    "for the QAOA simulator"
+                )
+            if qubits > 256:
+                raise ValueError(
+                    "quantum_max_agents * quantum_max_objectives must be <= 256"
+                )
+            if self.task_control != "distributed":
+                raise ValueError(
+                    "allocation_policy='quantum' requires task_control='distributed'"
+                )
         if self.contract_amendment is not None:
             validate_positive_integer(
                 self.contract_amendment_agent_id,

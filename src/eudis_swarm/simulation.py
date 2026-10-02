@@ -83,6 +83,8 @@ from .observation_transport import (
     ObservationTransport,
 )
 from .peer_state import PeerStateStore
+from .quantum_opt import QaoaSettings
+from .quantum_policy import PeerEstimate, QuantumAllocationPolicy, QuantumProposal
 from .simulation_events import (
     CommunicationEvent,
     CommunicationEventKind,
@@ -123,6 +125,19 @@ class SimulationResult:
     task_discoveries: dict[int, ReceiverTaskDiscovery] | None = None
     observation_receipts: tuple[ObservationReceipt, ...] = ()
     task_description_receipts: tuple[TaskDescriptionReceipt, ...] = ()
+    quantum_solves: tuple[QuantumSolveRecord, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class QuantumSolveRecord:
+    """Observer copy of one receiver-local quantum solve.
+
+    Recorded for evaluation only; nothing in the run reads it back.
+    """
+
+    agent_id: int
+    timestamp: float
+    proposal: QuantumProposal
 
 
 def _initial_positions(config: SimulationConfig) -> list[Position]:
@@ -344,6 +359,17 @@ class Simulation:
             )
         self.task_utility = ReceiverLocalTaskUtility(utility_weights)
         self._pending_task_utilities: dict[tuple[int, int], LocalTaskUtility] = {}
+        self._quantum_policy = (
+            QuantumAllocationPolicy(
+                solver=config.quantum_solver,
+                max_agents=config.quantum_max_agents,
+                max_objectives=config.quantum_max_objectives,
+                qaoa=QaoaSettings(depth=config.qaoa_depth),
+            )
+            if config.allocation_policy == "quantum"
+            else None
+        )
+        self.quantum_solves: list[QuantumSolveRecord] = []
         allocator = (
             TaskAllocator()
             if config.allocation_policy == "distance"
@@ -816,6 +842,57 @@ class Simulation:
             communication_cost=self._local_communication_costs(agent.agent_id),
         )
 
+    def _quantum_ranked(
+        self,
+        agent: Agent,
+        ranked: tuple[LocalTaskUtility, ...],
+        candidates: Sequence[TaskObjective],
+        timestamp: float,
+    ) -> tuple[LocalTaskUtility, ...]:
+        """Reorder one receiver's ranking by its own quantum-solved plan.
+
+        Peers enter the formulation only through this receiver's HEARD
+        heartbeat copies. A peer that reported a current task is placed at
+        that task's briefed position if this receiver knows the objective,
+        with the distance it still had to fly as lead cost; otherwise it is
+        left out.
+        """
+
+        assert self._quantum_policy is not None
+        known = {
+            objective.task_id: objective
+            for objective in self._local_task_objectives(agent.agent_id)
+        }
+        peers: list[PeerEstimate] = []
+        for observation in self.peer_state_stores[agent.agent_id].heard_observations:
+            snapshot = observation.snapshot
+            if snapshot.current_task is None:
+                peers.append(PeerEstimate(snapshot.agent_id, snapshot.position))
+                continue
+            objective = known.get(snapshot.current_task)
+            if objective is None:
+                continue
+            peers.append(
+                PeerEstimate(
+                    snapshot.agent_id,
+                    objective.position,
+                    math.hypot(
+                        objective.position[0] - snapshot.position[0],
+                        objective.position[1] - snapshot.position[1],
+                    ),
+                )
+            )
+        proposal = self._quantum_policy.propose(
+            agent.agent_id, agent.position, peers, ranked, candidates
+        )
+        if proposal is None:
+            return ranked
+        self.quantum_solves.append(
+            QuantumSolveRecord(agent.agent_id, timestamp, proposal)
+        )
+        by_task = {utility.task_id: utility for utility in ranked}
+        return tuple(by_task[task_id] for task_id in proposal.order)
+
     def _create_local_claim_intents(self, timestamp: float) -> int:
         """Batch independent claim choices from pre-mutation receiver-local views."""
 
@@ -839,6 +916,8 @@ class Simulation:
                 if store.can_create_claim(objective.task_id, timestamp)
             )
             ranked = self._rank_local_objectives(agent, candidates)
+            if ranked and self._quantum_policy is not None:
+                ranked = self._quantum_ranked(agent, ranked, candidates, timestamp)
             if ranked:
                 intents.append(ranked[0])
 
@@ -933,11 +1012,12 @@ class Simulation:
         return stopped
 
     def _allocation_from_utility(self, utility: LocalTaskUtility) -> Allocation:
-        if self.config.allocation_policy == "distance":
+        if self.config.allocation_policy in {"distance", "quantum"}:
             return Allocation(
                 agent_id=utility.agent_id,
                 task_id=utility.task_id,
                 distance=utility.travel_cost,
+                policy=self.config.allocation_policy,
             )
         maximum_peer_count = len(self.mission.agents) - 1
         predicted_degree = maximum_peer_count - round(utility.communication_cost)
@@ -1506,6 +1586,7 @@ class Simulation:
             task_discoveries=dict(self.task_discoveries),
             observation_receipts=tuple(self.observation_receipts),
             task_description_receipts=tuple(self.task_description_receipts),
+            quantum_solves=tuple(self.quantum_solves),
         )
         LOGGER.info("\n%s", result.metrics.format_summary())
         return result
@@ -1627,9 +1708,37 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--allocation-policy",
-        choices=("distance", "connectivity"),
+        choices=("distance", "connectivity", "quantum"),
         default="distance",
-        help="task allocation policy (default: distance)",
+        help="task allocation policy (default: distance); 'quantum' solves a "
+        "small receiver-local assignment with a simulated quantum solver",
+    )
+    parser.add_argument(
+        "--quantum-solver",
+        choices=("qaoa", "sqa"),
+        default="qaoa",
+        help="with --allocation-policy quantum: statevector QAOA or simulated "
+        "quantum annealing (default: qaoa)",
+    )
+    parser.add_argument(
+        "--quantum-max-agents",
+        type=int,
+        default=3,
+        help="with --allocation-policy quantum: most UAVs per formulation, "
+        "self included (default: 3)",
+    )
+    parser.add_argument(
+        "--quantum-max-objectives",
+        type=int,
+        default=3,
+        help="with --allocation-policy quantum: most objectives per "
+        "formulation (default: 3)",
+    )
+    parser.add_argument(
+        "--qaoa-depth",
+        type=int,
+        default=2,
+        help="QAOA layers p for --quantum-solver qaoa (default: 2)",
     )
     parser.add_argument(
         "--communication-range",
@@ -1756,6 +1865,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             failure_timeout=arguments.failure_timeout,
             peer_state_stale_after=arguments.peer_state_stale_after,
             allocation_policy=arguments.allocation_policy,
+            quantum_solver=arguments.quantum_solver,
+            quantum_max_agents=arguments.quantum_max_agents,
+            quantum_max_objectives=arguments.quantum_max_objectives,
+            qaoa_depth=arguments.qaoa_depth,
             task_control=arguments.task_control,
             communication_range=arguments.communication_range,
             link_model=arguments.link_model,

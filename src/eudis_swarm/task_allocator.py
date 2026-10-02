@@ -46,14 +46,16 @@ class Allocation:
         validate_positive_integer(self.agent_id, name="allocation agent_id")
         validate_positive_integer(self.task_id, name="allocation task_id")
         validate_nonnegative_real(self.distance, name="allocation distance")
-        if self.policy not in {"distance", "connectivity"}:
+        if self.policy not in {"distance", "connectivity", "quantum"}:
             raise ValueError("unknown allocation policy")
-        if self.policy == "distance":
+        if self.policy in {"distance", "quantum"}:
             if (
                 self.predicted_peer_degree is not None
                 or self.predicted_isolation is not None
             ):
-                raise ValueError("distance allocations must not contain predictions")
+                raise ValueError(
+                    f"{self.policy} allocations must not contain predictions"
+                )
             return
         if (
             not isinstance(self.predicted_peer_degree, int)
