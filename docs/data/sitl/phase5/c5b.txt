@@ -39,5 +39,5 @@ sitl: lock-step per vehicle
 | 3 | 59 | 0.400 s | 0.164 s | 0.068 s |
 | 4 | 59 | 0.500 s | 0.277 s | 0.006 s |
 
-evidence log: /tmp/claude-0/runs/c5b.jsonl
+evidence log: docs/data/sitl/phase5/c5b.jsonl
 wall 27 s
