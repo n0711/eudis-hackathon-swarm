@@ -86,7 +86,9 @@ the work survives the loss of the UAV that saw it
 It does **not** yet include live perception input, exploration mapping, relay
 positioning, flight safety supervision, or physical flight. For a short
 demonstration use the [runbook](docs/demo_runbook.md); the laboratory evidence
-toward TRL4 is tracked in [`docs/trl4_validation.md`](docs/trl4_validation.md).
+toward TRL4 is tracked in [`docs/trl4_validation.md`](docs/trl4_validation.md),
+and each Challenge 2 requirement is mapped to code, evidence and gaps in
+[`docs/challenge2_coverage.md`](docs/challenge2_coverage.md).
 
 ## EUDIS Challenge
 

@@ -60,6 +60,7 @@ eudis-swarm-generalization = "eudis_swarm.generalization:main"
 eudis-swarm-observation-replay = "eudis_swarm.observation_replay:main"
 eudis-swarm-robustness = "eudis_swarm.robustness:main"
 eudis-swarm-quantum-study = "eudis_swarm.quantum_study:main"
+eudis-swarm-search = "eudis_swarm.search_mission:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
