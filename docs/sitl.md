@@ -236,15 +236,37 @@ behind the `sitl` extra, one aircraft flying to commanded waypoints under
 repeated legs on one SITL vehicle and compare observations with the point-mass
 prediction. This is not a comparison of two `Simulation` backends.
 
-**Phase 4 — integrate one vehicle.** *(adapter done; not yet flown)*
+**Phase 4 — integrate one vehicle.** *(done; flown in SITL)*
 `MavlinkBackend` and `scripts/sitl_mission_demo.py` implement the contract
 above and are verified against `tests/test_mavlink_backend.py`'s fakes,
 including one full `Simulation` mission converging with the same evidence
-semantics as the all-point-mass case. **No one has yet run the script against
-a live ArduPilot instance** — that needs the WSL2/ArduPilot environment
-described above, which this change was written without access to. Treat it as
-implemented and tested, not as flown, until someone runs it and records what
-happened here.
+semantics as the all-point-mass case. Flown on 2 October 2026 against a fresh
+ArduCopter SITL instance (`ArduPilot-4.6.0-beta1-7231-g7d2d454eba`, quad,
+`--speedup 5`) on this machine:
+
+```text
+connecting to tcp:127.0.0.1:5760 ...
+airborne at 19.1 m; starting the mission
+completed 2/2 tasks
+mission duration (logical seconds): 4.50
+agent 1 final position (from live telemetry): (33.71452158974091, 20.716557236686313)
+```
+
+Two things the flight taught that the fakes could not:
+
+- **Arrival tolerance.** The simulator's 0.75 m default assumes a point mass;
+  a copter settles 1.4-2.0 m away (phase 3), so no task would ever complete.
+  The live mission uses a 3.0 m tolerance.
+- **Clock drift.** Over 18 steps of 0.25 s logical time the vehicle clock
+  advanced 0.40 s per step — 7.20 s against 4.50 s. Telemetry was fresh; the
+  cause is quantisation: position arrives at 5 Hz (every 0.2 s of vehicle
+  time), and waiting for "last observation + elapsed" overshoots to the next
+  report on every step, so the error accumulates. Anchoring each vehicle's
+  wait to its first step plus cumulative logical time bounds the error to one
+  telemetry interval instead.
+
+Evidence bundle: `evidence/20261002T040554Z-LT2` (see
+[`trl4_validation.md`](trl4_validation.md)).
 
 **Later — more than one.** Multiple SITL instances, distinct MAVLink ports.
 This is where it becomes expensive: process management, port allocation, and
@@ -261,14 +283,12 @@ repeatable presentation path.
 Phase 1 is worth doing regardless: it removes a duplicated motion model and
 names a distinction the code was blurring.
 
-Phase 4 closes the specific gap Phase 2/3 left open — a real autopilot's
-telemetry now can drive one agent inside an actual coordination mission — but
-it is a coded, tested capability waiting on a live run, not a result. Before
-presenting it as one, run `scripts/sitl_mission_demo.py` against a real SITL
-instance at least once and record what actually happened, the same way Phase
-2 and Phase 3's numbers above were recorded rather than assumed. It also does
-not model a true fail-stop on a real vehicle (see point 3 above) — say so if
-asked, rather than letting the distributed-failure story imply it does.
+Phase 4 closes the specific gap Phase 2/3 left open: real firmware's telemetry
+has driven one agent through an actual coordination mission to completion. Say
+what it is — one vehicle, SITL not flight, a measured clock drift until the
+anchored lock-step lands — and that it does not yet model a true fail-stop on a
+real vehicle (see point 3 above), rather than letting the distributed-failure
+story imply it does.
 
 Several SITL instances add process management, port allocation, and startup
 time; multi-vehicle SITL stays out of scope for this hackathon. Keep the

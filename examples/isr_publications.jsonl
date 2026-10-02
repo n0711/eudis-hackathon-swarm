@@ -1,0 +1,4 @@
+{"source_agent_id":1,"published_at":0.1,"record":{"schema_version":1,"record_type":"source_status","uav_id":"camera_1","timestamp_ms":1790721000000,"status":"running"}}
+{"source_agent_id":1,"published_at":0.1,"record":{"schema_version":1,"uav_id":"camera_1","track_id":17,"timestamp_ms":1790721000001,"class_label":"vehicle","confidence":0.9,"bbox_xyxy":[0,0,10,10],"image_size":[20,20],"track_status":"observed","coordinate_frame":"mission_xy_m","mission_position_m":[40,40]}}
+{"source_agent_id":1,"published_at":2,"record":{"schema_version":1,"record_type":"source_status","uav_id":"camera_1","timestamp_ms":1790721002000,"status":"running"}}
+{"source_agent_id":1,"published_at":2,"record":{"schema_version":1,"uav_id":"camera_1","track_id":17,"timestamp_ms":1790721002001,"class_label":"vehicle","confidence":0.9,"bbox_xyxy":[0,0,10,10],"image_size":[20,20],"track_status":"observed","coordinate_frame":"mission_xy_m","mission_position_m":[40,40]}}

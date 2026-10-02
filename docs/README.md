@@ -9,6 +9,8 @@ document that assumes you know nothing.
 | --- | --- |
 | Get running and find your way around | [`onboarding.md`](onboarding.md) |
 | Rehearse the current hackathon demonstration | [`demo_runbook.md`](demo_runbook.md) |
+| See how each Challenge 2 requirement is covered, and what is missing | [`challenge2_coverage.md`](challenge2_coverage.md) |
+| Check the TRL4 claim, run a lab test card, or read the evidence log | [`trl4_validation.md`](trl4_validation.md) |
 | Replay synthetic ISR observations and inspect the integration boundary | [`observation_integration.md`](observation_integration.md) |
 | Know what has actually been measured, and what has not | [`measured_results.md`](measured_results.md) |
 | Inspect the paired fleet/network comparison and raw data | [`generalization_study.md`](generalization_study.md) |

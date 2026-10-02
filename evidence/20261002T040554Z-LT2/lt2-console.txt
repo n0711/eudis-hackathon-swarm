@@ -1,0 +1,5 @@
+connecting to tcp:127.0.0.1:5760 ...
+airborne at 19.1 m; starting the mission
+completed 2/2 tasks
+mission duration (logical seconds): 4.50
+agent 1 final position (from live telemetry): (33.71452158974091, 20.716557236686313)
