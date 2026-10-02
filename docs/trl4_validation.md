@@ -59,7 +59,7 @@ reader can run. Update the right-hand column only from a recorded result in the
 | C1 Task ownership | deterministic simulation, exact-pinned tests incl. chain/cyclic/clique topologies and negative assertions; 440-run and 960-run paired studies against a central baseline ([`measured_results.md`](measured_results.md)) | 3 | LT2/LT3 (inside a mission flown by real firmware), LT4/LT5 (as separate processes over a real network) |
 | C2 Failure handling | as C1; quorum floor demonstrated ([README](../README.md)) | 3 | LT3 (physical fail-stop of a SITL vehicle), LT5 (a host physically switched off) |
 | C3 Communication | synthetic radio model, jammer, blocked links | 3 | LT5 (real Wi-Fi partition and reconnection), LT6 (measured delivery ratio) |
-| C4 Vehicle integration | one ArduCopter SITL vehicle flown standalone with measured model error ([`sitl.md`](sitl.md)); **LT2 passed**: one SITL copter flew inside a distributed coordination mission, 2/2 tasks, with a measured, not-yet-fixed 1.6× vehicle-vs-logical clock drift | 4 for one integrated vehicle | LT3 (all vehicles live, with fail-stop) |
+| C4 Vehicle integration | one ArduCopter SITL vehicle flown standalone with measured model error ([`sitl.md`](sitl.md)); **LT2 passed**: one SITL copter flew inside a distributed coordination mission, 2/2 tasks, with a measured, not-yet-fixed 1.6× vehicle-vs-logical clock drift. A second airframe class, ArduRover SITL, follows the same GUIDED position targets and settles 0.15-0.81 m from them ([`data/sitl/rover_settle_2026-10-02.txt`](data/sitl/rover_settle_2026-10-02.txt)) | 4 for one integrated vehicle | LT3 (all vehicles live, with fail-stop; copters and a rover in one mission) |
 | C5 ISR task discovery | synthetic publications; paired relay-recovery demonstration ([`observation_integration.md`](observation_integration.md)) | 3 | LT7 (real perception output) |
 | C6 Operator intent | deterministic simulation and tests | 3 | not targeted for this event |
 
@@ -191,7 +191,7 @@ observed.
 
 | ID | Date | Commit | Hardware / environment | Command | Result | Artefacts | PASS / FAIL |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| LT1 | | | | | | | |
+| LT1 | 2026-10-02 | `272d032` | WSL2 Ubuntu on the team laptop, Python 3.11 | `python scripts/collect_evidence.py LT1` | full suite passed, 91.01% branch coverage; `demo-quorum-floor` 3/3 at 10.75 s; `baseline-quorum-floor` 2/3, exit 1 | [`evidence/20261002T042654Z-LT1`](../evidence/20261002T042654Z-LT1) | PASS |
 | LT2 | 2026-10-02 | `7c8a0fb` | WSL2 Ubuntu on the team laptop; ArduCopter SITL `ArduPilot-4.6.0-beta1-7231-g7d2d454eba`, quad, `--speedup 5`, fresh start | `python scripts/sitl_mission_demo.py tcp:127.0.0.1:5760` | 2/2 tasks, 4.50 logical s, 12 s wall incl. arm and takeoff; agent 1 final position from live telemetry. Limit measured on the same commit: vehicle clock ran 1.6× logical time (7.20 s vs 4.50 s over 18 steps), because 5 Hz telemetry quantises each 0.25 s lock-step to 0.40 s | [`evidence/20261002T040554Z-LT2`](../evidence/20261002T040554Z-LT2) | PASS |
 | LT3 | | | | | | | |
 | LT4 | | | | | | | |
