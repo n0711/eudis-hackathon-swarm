@@ -29,6 +29,11 @@ from eudis_swarm.sitl import SitlVehicle
 #: The integrated agent's id. It must exist in the configured scenario.
 INTEGRATED_AGENT_ID = 1
 
+#: A real multirotor settles 1.4-2.0 m from a commanded point (docs/sitl.md,
+#: phase 3). The simulator's default 0.75 m arrival tolerance assumes a point
+#: mass and would never be met, so a live mission uses the measured envelope.
+LIVE_COMPLETION_TOLERANCE_M = 3.0
+
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
@@ -55,6 +60,7 @@ def main(argv: list[str] | None = None) -> int:
         task_control="distributed",
         max_simulation_time=120.0,
         random_seed=7,
+        completion_tolerance=LIVE_COMPLETION_TOLERANCE_M,
     )
     backend = MavlinkBackend(
         {INTEGRATED_AGENT_ID: vehicle}, step_timeout=arguments.step_timeout

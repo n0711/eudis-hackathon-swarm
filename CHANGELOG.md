@@ -8,6 +8,16 @@ and interfaces change between prototypes.
 ## [Unreleased]
 
 ### Added
+- `docs/trl4_validation.md`: the readiness scale used, per-component status,
+  the criteria under which a TRL4 claim is justified, seven laboratory test
+  cards for equipment day, and an evidence log to be filled only from
+  observed runs.
+- Scheduled ISR observation publications inside `Simulation`: fresh, confident
+  tracks with explicit mission coordinates make a bounded stationary inspection
+  task eligible for the receivers that actually got them, and accepted
+  objectives are shared by description gossip so the work survives the loss of
+  the observing UAV (`python -m eudis_swarm.observation_demo`, paired
+  relay-recovery scenario: 3/3 with sharing, 2/3 without; synthetic data).
 - `MavlinkBackend` (`src/eudis_swarm/mavlink_backend.py`): a `VehicleBackend`
   adapter that drives one agent's physical motion from live `SitlVehicle`
   telemetry inside an otherwise normal `Simulation` mission, lock-stepped on
@@ -369,6 +379,10 @@ and interfaces change between prototypes.
 
 ### Removed
 
+- The Streamlit trace dashboard (`eudis-swarm-dashboard`, the `dashboard`
+  extra) and its viewer-only modules. Traces are still recorded as JSON with
+  `--record-trace`; the demo runbook now uses console output only. The full
+  optional install is `.[dev]` (plus `.[sitl]` or `.[charts]` as needed).
 - The legacy `--visualize` matplotlib final-frame view, its
   `src/eudis_swarm/visualization.py` module, and the `visualization` optional
   extra. It drew one static frame and was superseded by the trace-playback
