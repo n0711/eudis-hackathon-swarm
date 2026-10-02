@@ -59,13 +59,14 @@ reader can run. Update the right-hand column only from a recorded result in the
 | C1 Task ownership | deterministic simulation, exact-pinned tests incl. chain/cyclic/clique topologies and negative assertions; 440-run and 960-run paired studies against a central baseline ([`measured_results.md`](measured_results.md)) | 3 | LT2/LT3 (inside a mission flown by real firmware), LT4/LT5 (as separate processes over a real network) |
 | C2 Failure handling | as C1; quorum floor demonstrated ([README](../README.md)) | 3 | LT3 (physical fail-stop of a SITL vehicle), LT5 (a host physically switched off) |
 | C3 Communication | synthetic radio model, jammer, blocked links | 3 | LT5 (real Wi-Fi partition and reconnection), LT6 (measured delivery ratio) |
-| C4 Vehicle integration | one ArduCopter SITL vehicle flown standalone with measured model error ([`sitl.md`](sitl.md)); `MavlinkBackend` tested against fakes | 4 for the adapter in isolation; not yet integrated | LT2/LT3 |
+| C4 Vehicle integration | one ArduCopter SITL vehicle flown standalone with measured model error ([`sitl.md`](sitl.md)); **LT2 passed**: one SITL copter flew inside a distributed coordination mission, 2/2 tasks, with a measured, not-yet-fixed 1.6× vehicle-vs-logical clock drift | 4 for one integrated vehicle | LT3 (all vehicles live, with fail-stop) |
 | C5 ISR task discovery | synthetic publications; paired relay-recovery demonstration ([`observation_integration.md`](observation_integration.md)) | 3 | LT7 (real perception output) |
 | C6 Operator intent | deterministic simulation and tests | 3 | not targeted for this event |
 
-**Honest summary today:** strong TRL3 for the coordination function; TRL4 only
-for the MAVLink adapter as an isolated component. The laboratory tests below
-are what turn that into a TRL4 claim for the coordination function itself.
+**Honest summary today:** strong TRL3 for the coordination function; TRL4 for
+vehicle integration with one live SITL vehicle inside a coordination mission
+(LT2). LT3 and LT5 are what turn that into a TRL4 claim for the coordination
+function itself.
 
 ## When the TRL4 claim is justified
 
@@ -191,7 +192,7 @@ observed.
 | ID | Date | Commit | Hardware / environment | Command | Result | Artefacts | PASS / FAIL |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | LT1 | | | | | | | |
-| LT2 | | | | | | | |
+| LT2 | 2026-10-02 | `7c8a0fb` | WSL2 Ubuntu on the team laptop; ArduCopter SITL `ArduPilot-4.6.0-beta1-7231-g7d2d454eba`, quad, `--speedup 5`, fresh start | `python scripts/sitl_mission_demo.py tcp:127.0.0.1:5760` | 2/2 tasks, 4.50 logical s, 12 s wall incl. arm and takeoff; agent 1 final position from live telemetry. Limit measured on the same commit: vehicle clock ran 1.6× logical time (7.20 s vs 4.50 s over 18 steps), because 5 Hz telemetry quantises each 0.25 s lock-step to 0.40 s | [`evidence/20261002T040554Z-LT2`](../evidence/20261002T040554Z-LT2) | PASS |
 | LT3 | | | | | | | |
 | LT4 | | | | | | | |
 | LT5 | | | | | | | |

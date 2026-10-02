@@ -1,0 +1,44 @@
+ {
+  "logical_elapsed": 0.25,
+  "vehicle_elapsed_reported": 0.40099999999999625,
+  "vehicle_elapsed_freshest": 0.40099999999999625,
+  "step_vehicle_before": 106.186,
+  "wall_s": 0.07525552199513186
+ },
+ {
+  "logical_elapsed": 0.5,
+  "vehicle_elapsed_reported": 0.8009999999999877,
+  "vehicle_elapsed_freshest": 0.8009999999999877,
+  "step_vehicle_before": 106.587,
+  "wall_s": 0.07680012899800204
+ },
+ {
+  "logical_elapsed": 0.75,
+  "vehicle_elapsed_reported": 1.2009999999999934,
+  "vehicle_elapsed_freshest": 1.2009999999999934,
+  "step_vehicle_before": 106.987,
+  "wall_s": 0.07882410600723233
+ },
+ {
+  "logical_elapsed": 4.0,
+  "vehicle_elapsed_reported": 6.3999999999999915,
+  "vehicle_elapsed_freshest": 6.3999999999999915,
+  "step_vehicle_before": 112.186,
+  "wall_s": 0.0714021860039793
+ },
+ {
+  "logical_elapsed": 4.25,
+  "vehicle_elapsed_reported": 6.800999999999988,
+  "vehicle_elapsed_freshest": 6.800999999999988,
+  "step_vehicle_before": 112.586,
+  "wall_s": 0.07656201899226289
+ },
+ {
+  "logical_elapsed": 4.5,
+  "vehicle_elapsed_reported": 7.200999999999993,
+  "vehicle_elapsed_freshest": 7.200999999999993,
+  "step_vehicle_before": 112.987,
+  "wall_s": 0.08253226800297853
+ }
+]
+steps=18 logical=4.50s vehicle(reported)=7.20s vehicle(freshest)=7.20s completed=2/2

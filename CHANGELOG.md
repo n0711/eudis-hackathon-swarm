@@ -23,9 +23,11 @@ and interfaces change between prototypes.
   telemetry inside an otherwise normal `Simulation` mission, lock-stepped on
   the vehicle's own clock with a hard wall-clock timeout per step. Every other
   agent still moves through `PointMassBackend`, unchanged. Fully covered by
-  `tests/test_mavlink_backend.py` against a fake vehicle; not yet run against
-  a live ArduPilot instance (see `docs/sitl.md`). `scripts/sitl_mission_demo.py`
-  runs it against a real SITL connection.
+  `tests/test_mavlink_backend.py` against a fake vehicle.
+  `scripts/sitl_mission_demo.py` runs it against a real SITL connection; one
+  ArduCopter SITL vehicle has flown that mission to completion (LT2 in
+  `docs/trl4_validation.md`, with a measured 1.6x vehicle-vs-logical clock
+  drift caused by 5 Hz telemetry quantising each lock-step).
 - A standalone version-1 JSONL observation replay with isolated receiver views,
   source/track timeouts, explicit empty scenes, and two-source sample data.
   It does not connect perception to `Simulation` task creation or movement.

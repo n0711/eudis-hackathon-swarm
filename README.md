@@ -75,8 +75,9 @@ receiver-local task ownership under communication loss. It includes a point-mass
 `VehicleBackend`, paired centralized comparisons, recorded JSON traces, and a
 separate one-vehicle ArduPilot SITL experiment. A `MavlinkBackend` adapter
 can now route one agent's motion through live SITL telemetry inside an actual
-coordination mission ([`docs/sitl.md`](docs/sitl.md)) — implemented and tested,
-but not yet run against a live autopilot. Scheduled ISR observation
+coordination mission ([`docs/sitl.md`](docs/sitl.md)); one ArduCopter SITL
+vehicle has flown such a mission to completion (LT2 in
+[`docs/trl4_validation.md`](docs/trl4_validation.md), with its measured limits). Scheduled ISR observation
 publications (synthetic JSONL with explicit mission coordinates) can make a
 bounded stationary inspection task eligible for the receivers that actually got
 the observation, and accepted objectives are shared by description gossip so
