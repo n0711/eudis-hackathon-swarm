@@ -1,3 +1,4 @@
+\pdfoutput=1
 % =============================================================================
 %  Communication Loss Is Not Failure:
 %  Consensus-Free Task Ownership for UAV Swarms Under Partition
@@ -9,8 +10,7 @@
 %          with IEEEtran, TikZ/pgfplots (>= 1.17), subfig, algorithmicx.
 %
 %  Every number in this paper is reproducible from the repository: see
-%  Appendix B. Placeholders that must be resolved before submission are
-%  marked "TODO".
+%  Appendix B.
 % =============================================================================
 \documentclass[conference]{IEEEtran}
 \IEEEoverridecommandlockouts
@@ -61,13 +61,10 @@
 \title{Communication Loss Is Not Failure:\\
 Consensus-Free Task Ownership for UAV Swarms\\ Under Network Partition}
 
-% TODO: confirm the author list, order, affiliations and contact e-mail.
-% Further team members (e.g. perception, hardware and flight operations) can
-% be added with \and and another \IEEEauthorblockN/\IEEEauthorblockA pair.
 \author{\IEEEauthorblockN{Charalampos Nadiotis}
-\IEEEauthorblockA{\textit{Team Teleforce} \\
-EUDIS Defence Hackathon 2026, Nicosia, Cyprus \\
-% TODO: institutional affiliation
+\IEEEauthorblockA{\textit{ADDITESS Ltd}, Nicosia, Cyprus \\
+\textit{Frederick University}, Nicosia, Cyprus \\
+Team Teleforce, EUDIS Defence Hackathon 2026 \\
 charalamposnadiotis@gmail.com}
 }
 
@@ -1580,14 +1577,11 @@ calibrated airframe model.
 
 % =============================================================================
 \section*{Acknowledgment}
-% TODO: acknowledge team members who are not authors (e.g. perception and
-% hardware/flight-operations work), mentors, and any sponsor or partner, in
-% line with the organisers' rules on declared company backing.
-The authors thank the organisers of the EUDIS Defence Hackathon 2026
-(Cyprus). The on-board perception pipeline for the physical ISR aircraft,
-based on VERA-MOT, is the work of [TODO: name], Team Teleforce. This work is
-an independent team prototype; it is not affiliated with or endorsed by any
-hackathon partner, sponsor or host.
+The author thanks the organisers of the EUDIS Defence Hackathon 2026
+(Cyprus) and the other members of Team Teleforce; the on-board perception
+pipeline for the physical ISR aircraft, based on VERA-MOT, is the work of a
+fellow team member. The views expressed are the author's own and are not
+endorsed by the hackathon organisers or partners.
 
 \bibliographystyle{IEEEtran}
 \bibliography{references}
@@ -1664,8 +1658,6 @@ python paper/scripts/qaoa_benchmark.py
 
 The committed raw CSV files of the fleet and layout studies have SHA-256
 digests \code{f23f50f8\ldots{}86e1fe} and \code{582018f1\ldots{}f75576}.
-% TODO: decide the licence and public availability of the repository, then
-% replace this sentence with a persistent archive link (e.g. a Zenodo DOI).
-The source code is available from the authors on request.
+The source code is available from the author on request.
 
 \end{document}
