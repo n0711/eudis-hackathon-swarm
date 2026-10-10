@@ -1,0 +1,10 @@
+# LaTeX build output (latexmk -pdf -outdir=build main.tex)
+build/
+*.aux
+*.bbl
+*.blg
+*.fdb_latexmk
+*.fls
+*.log
+*.out
+*.synctex.gz
