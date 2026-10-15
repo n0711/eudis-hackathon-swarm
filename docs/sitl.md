@@ -317,6 +317,7 @@ hold, its work recovered by the others through lease expiry.
 | Report | `live_report.py`, `scripts/sitl_swarm_report.py` | Derives everything from the log alone: tasks, mission time, detection latency, orphaned tasks and recovery latency, concurrent ownership, minimum pairwise 3-D separation and steps below a threshold, per-vehicle drift, the observed hold (distance moved after the command, final speed). `--check` evaluates the LT3 test card's P1-P8 mechanically and exits non-zero unless every run passes; each log file is summarised on its own (`--combine` merges files). |
 | Chart | `live_chart.py`, `scripts/sitl_swarm_chart.py` | One offline HTML page per log (needs the `charts` extra): live tracks beside point-mass tracks on the same axes, tasks, the failure point and where the failed vehicle actually came to rest, observed altitude bands over time, minimum separation against the threshold, plus the comparison table and checklist as text. |
 | Reel | `live_reel.py`, `scripts/sitl_swarm_reel.py` | A vertical 1080x1920 animation of one log for social/pitch use: a big thin title, one glowing map, captions that tell the story (work shared, a vehicle fails and is held, the others notice, the task is taken over, the mission finishes) with every number taken from the log. Plays in a browser; `--video out.mp4` captures it frame by frame (needs Playwright, a Chromium and ffmpeg; presentation tools only, not package dependencies). |
+| Position tune | `sitl_tuning.py`, `scripts/sitl_tune.py`, `config/sitl/copter-tuned.parm` | Measures and tunes ArduCopter's horizontal PIDs and motion limits on live SITL copters; see "Tuning the position controller". Loaded with `COPTER_PARAMS=...`. |
 | LT3 runner | `scripts/sitl-lt3.sh` | The whole test card in one command: for each run, fresh instances, fly, stop; then `--check` over every log; exit 0 only when every run passed. |
 | Launcher | `scripts/sitl-swarm.sh` | N instances (`-I i`, TCP `5760+10i`, sysid `i+1`), copters and/or rovers, each in its own directory, each starting at its agent's simulated start position about a shared origin; `stop`, `status`, `DRY_RUN=1`. |
 | Mission | `sitl_swarm.py`, `scripts/sitl_swarm_mission.py` | Connects N vehicles, checks each is at its simulated start, arms copters to layered altitudes and rovers on the ground, flies one distributed-control mission (all agents or `--live-agents`) with a scheduled physical failure and optional `--jammer`/`--comm-fault`, holds every vehicle if anything aborts, lands copters, writes the log, then flies the identical configuration on the point-mass backend and prints both side by side. |
@@ -479,6 +480,8 @@ Or the whole test card, three fresh runs and the verdict, in one command:
 
 ```bash
 scripts/sitl-lt3.sh 3 5                       # results in lt3-<UTC time>/
+COPTER_PARAMS=config/sitl/copter-tuned.parm \
+    scripts/sitl-lt3.sh 3 5                   # the same with the SITL tune
 VEHICLES=copter,copter,copter,rover scripts/sitl-lt3.sh 3 5 -- \
     --failure-agent 4 --failure-time 8        # the mixed-swarm variant
 ```
@@ -568,6 +571,101 @@ Live numbers are non-deterministic and are not measured results.
   the communication-only projection (still point-mass); real RF; hardware.
 - README, CHANGELOG and milestones are deliberately untouched by this work;
   their summaries should be updated when this branch is integrated.
+
+## Tuning the position controller (SITL only)
+
+The swarm missions exposed three things the copter's own control did badly:
+a fail-stopped copter needed about 16 m to stop, each leg ran 1.7x slower than
+the point-mass model, and every arrival overshot and then crept back. All
+three are ArduCopter position-control behaviour, so they were tuned on the
+SITL quad by measurement rather than by hand.
+
+**What was tuned, and what was not.** The horizontal position and velocity
+controllers (`PSC_NE_POS_P`, `PSC_NE_VEL_P/I/D`, the PIDs) and the limits that
+shape them: `WP_ACC`/`WP_JERK` (how hard a GUIDED leg accelerates and stops),
+`PSC_NE_JERK` (how fast deceleration builds in BRAKE, the fail-stop mode) and
+`ATC_ANGLE_MAX` (the lean angle that caps every horizontal acceleration). The
+inner attitude-rate loops (`ATC_RAT_*`) were left alone: they are matched to
+the simulated airframe. **This is a tune of ArduPilot's simulated quad, not of
+any aircraft.** A real airframe needs AutoTune for its rate loops and then its
+own, more conservative, position tune; never fly these numbers.
+
+**How it was measured** (`scripts/sitl_tune.py`, logic in
+`src/eudis_swarm/sitl_tuning.py`). Four SITL copters work in parallel. For
+each candidate a copter sets the parameters (each confirmed by the
+autopilot's own PARAM_VALUE echo), passes through BRAKE into GUIDED so the
+mode re-reads its limits, and flies four 40 m GUIDED steps around a square
+(holding each until settled) and one long leg cut by BRAKE at 8 m/s. Each
+trial is scored on settle time (to within 0.3 m and staying), overshoot,
+final error and braking distance. A candidate is disqualified outright if it
+rings (more than two along-track velocity reversals after arrival), overshoots
+more than 1.5 m, strays more than 1.5 m in altitude, or rebounds more than
+0.5 m after BRAKE. A staged coordinate search (PIDs, then shaping, two rounds)
+picks a winner, which is then flown 8 times against 8 flights of the stock
+defaults.
+
+**Result** (`config/sitl/copter-tuned.parm`; ArduCopter V4.8.0-dev SITL quad,
+`--speedup 5`, 8 confirmation flights each):
+
+| | stock defaults | tuned |
+| --- | ---: | ---: |
+| Settle time, 40 m step | 11.05 s | **6.10 s** |
+| Overshoot | 0.72 m | **0.20 m** |
+| BRAKE stopping distance from about 8 m/s | 16.9 m | **10.6 m** |
+| Parameters changed | | `PSC_NE_POS_P` 1 -> 2, `PSC_NE_VEL_I` 1 -> 1.5, `PSC_NE_JERK` 5 -> 10, `WP_ACC` 2.5 -> 5, `ATC_ANGLE_MAX` 30 -> 35 |
+
+Run-to-run noise in this setup is small: the stock defaults scored
+17.84-17.98 over four simultaneous flights. Every trial is in
+[`data/sitl/tuning/`](data/sitl/tuning/) (`search-*` is the first search,
+`search2-*` the corrected one described below, `confirm-*` an earlier 8-vs-8
+confirmation of the PID-only tune).
+
+**In the swarm mission** (LT3 defaults, three fresh runs each;
+`COPTER_PARAMS=config/sitl/copter-tuned.parm scripts/sitl-lt3.sh 3 5`):
+
+| | stock (`c5`, `c5b`, `c5c`) | tuned (`tuned1-3`) |
+| --- | ---: | ---: |
+| Mission time | 14.25-14.75 s | **11.75-12.00 s** |
+| Recovery after the failure | 7.00-7.25 s | **4.75-5.00 s** |
+| Distance travelled after the fail-stop BRAKE | 15.7-17.4 m | **12.9-13.8 m** |
+| Minimum 3-D separation | 13.0-14.9 m | 16.4-16.6 m |
+| Max lock-step drift | 0.60-0.70 s | 0.35-0.55 s |
+| Test card | 3/3 PASS | 3/3 PASS |
+
+The point-mass run of the same configuration takes 8.50 s, so the live
+mission is now 1.40x the model rather than 1.71x. The braking gain is smaller
+in the mission (-20 %) than in the fixed-speed test (-37 %) because the tuned
+copters are faster when they fail; the log does not record speed at the
+failure, so the two effects are not separated here. Logs and console output:
+[`data/sitl/phase5-tuned/`](data/sitl/phase5-tuned/).
+
+What the search showed about this firmware:
+
+- `PSC_NE_POS_P` 1 -> 2 is the single biggest PID win: settle 11.2 -> 7.7 s
+  and overshoot 0.75 -> 0.25 m. Lower `PSC_NE_VEL_P` (1.5) or no velocity D
+  term makes the vehicle ring; those candidates were disqualified.
+- `PSC_NE_JERK` 5 -> 10 cuts BRAKE from 16 m to 10 m; at 20 the vehicle
+  rebounds by more than a metre after stopping.
+- `WP_ACC` 2.5 -> 5 shortens a 40 m leg from 7.3 s to 6.3 s; `WP_JERK` made no
+  measurable difference to these legs.
+- Tighter tolerance does not shorten the mission: a task completes the first
+  time the vehicle passes within the tolerance on the way in, so overshoot
+  never delays completion (measured at 0.5 m: mission times stock 16.75-17.75 s,
+  PID-only tune 17.25-17.75 s). Mission time comes from acceleration, which is
+  why `WP_ACC` mattered.
+
+Two harness lessons: the first search reported `WP_ACC`/`WP_JERK` as having no
+effect because GUIDED reads them only when it initialises and re-selecting
+GUIDED while in GUIDED is a no-op, so each candidate flew with the previous
+one's limits; trials now pass through BRAKE first, and that stage was
+re-flown (`search2-*`). And under four instances plus four flight threads a
+parameter echo was occasionally missed within 5 s (not reproducible in 60
+isolated sets); the timeout is now 10 s and a trial whose flight fails for a
+harness reason is flown once more.
+
+Use the tune for lab runs with `COPTER_PARAMS=config/sitl/copter-tuned.parm`
+(the launcher reads it; the LT3 runner passes it through). It is opt-in: the recorded
+Phase 5 results above it were flown on stock parameters and stay comparable.
 
 ## Honest assessment
 

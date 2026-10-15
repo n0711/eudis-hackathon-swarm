@@ -32,6 +32,8 @@
 #                  (default /tmp/eudis-sitl-swarm)
 #   FRAME          ArduCopter frame model (default quad)
 #   ROVER_FRAME    ArduRover frame model (default rover)
+#   COPTER_PARAMS  extra .parm file loaded into every copter after the stock
+#                  defaults, e.g. config/sitl/copter-tuned.parm (SITL only)
 #   DRY_RUN=1      print what would be started and exit; needs no ArduPilot
 #
 # Prerequisites: Linux or WSL2 with an ArduPilot checkout and
@@ -48,6 +50,7 @@ RUN_DIR="${RUN_DIR:-/tmp/eudis-sitl-swarm}"
 FRAME="${FRAME:-quad}"
 ROVER_FRAME="${ROVER_FRAME:-rover}"
 VEHICLES="${VEHICLES:-}"
+COPTER_PARAMS="${COPTER_PARAMS:-}"
 DRY_RUN="${DRY_RUN:-0}"
 BASE_PORT=5760
 PORT_STRIDE=10
@@ -124,7 +127,14 @@ PY
 # binary, model and defaults file for one vehicle type
 vehicle_binary() { echo "${ARDUPILOT_DIR}/build/sitl/bin/ardu$1"; }
 vehicle_model() { if [[ "$1" == "rover" ]]; then echo "$ROVER_FRAME"; else echo "$FRAME"; fi; }
-vehicle_defaults() { echo "${ARDUPILOT_DIR}/Tools/autotest/default_params/$1.parm"; }
+vehicle_defaults() {
+    local stock="${ARDUPILOT_DIR}/Tools/autotest/default_params/$1.parm"
+    if [[ "$1" == "copter" && -n "$COPTER_PARAMS" ]]; then
+        echo "${stock},${COPTER_PARAMS}"
+    else
+        echo "$stock"
+    fi
+}
 
 start_all() {
     local count="$1" speedup="$2"
@@ -155,6 +165,13 @@ start_all() {
         fi
     done
 
+    if [[ -n "$COPTER_PARAMS" ]]; then
+        if [[ ! -f "$COPTER_PARAMS" ]]; then
+            echo "ERROR: COPTER_PARAMS file '${COPTER_PARAMS}' does not exist" >&2
+            exit 2
+        fi
+        COPTER_PARAMS="$(cd "$(dirname "$COPTER_PARAMS")" && pwd)/$(basename "$COPTER_PARAMS")"
+    fi
     if [[ "$DRY_RUN" != "1" ]]; then
         for kind in $(printf '%s\n' "${types[@]}" | sort -u); do
             if [[ ! -x "$(vehicle_binary "$kind")" ]]; then

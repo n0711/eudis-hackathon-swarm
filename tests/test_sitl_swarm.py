@@ -723,3 +723,20 @@ def test_runner_fails_a_run_that_wrote_no_evidence(tmp_path: Path) -> None:
     assert "run 1: FAIL, no evidence log (mission status 1)" in result.stdout
     assert "LT3 FAIL" in result.stdout
     assert not (tmp_path / "sitl" / "run1" / "pids").exists()
+
+
+@needs_bash
+def test_launcher_loads_a_copter_parameter_file_only_into_copters(
+    tmp_path: Path,
+) -> None:
+    parm = tmp_path / "tuned.parm"
+    parm.write_text("PSC_NE_POS_P 2\n")
+    result = _launch("copter", "rover", DRY_RUN="1", COPTER_PARAMS=str(parm))
+    assert result.returncode == 0, result.stderr
+    copter, rover = [
+        line for line in result.stdout.splitlines() if "--defaults" in line
+    ]
+    assert copter.rstrip(")").endswith(f"copter.parm,{parm}")
+    assert rover.rstrip(")").endswith("rover.parm")
+    missing = _launch("1", DRY_RUN="1", COPTER_PARAMS=str(tmp_path / "nope.parm"))
+    assert missing.returncode == 2 and "does not exist" in missing.stderr

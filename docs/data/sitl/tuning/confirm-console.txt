@@ -1,0 +1,27 @@
+worker 0: connected at 5.0,5.0
+worker 1: connected at 95.0,5.0
+worker 2: connected at 5.0,95.0
+worker 3: connected at 95.0,95.0
+all airborne
+confirming: defaults and the winner, 8x each
+  [confirm-defaults] [defaults] score 17.83: arrive 7.40 s, settled 11.12 s, final 0.11 m, overshoot 0.74 m, brake 16.1 m from 8.2 m/s in 4.6 s
+  [confirm-defaults] [defaults] score 17.95: arrive 7.40 s, settled 11.15 s, final 0.11 m, overshoot 0.75 m, brake 16.5 m from 8.3 m/s in 4.8 s
+  [confirm-defaults] [defaults] score 17.90: arrive 7.39 s, settled 11.11 s, final 0.11 m, overshoot 0.78 m, brake 16.1 m from 8.1 m/s in 4.7 s
+  [confirm-defaults] [defaults] score 18.01: arrive 7.40 s, settled 11.17 s, final 0.11 m, overshoot 0.76 m, brake 16.6 m from 8.3 m/s in 4.7 s
+  [confirm-defaults] [defaults] score 18.01: arrive 7.39 s, settled 11.16 s, final 0.12 m, overshoot 0.76 m, brake 16.2 m from 8.1 m/s in 4.7 s
+  [confirm-defaults] [defaults] score 18.01: arrive 7.39 s, settled 11.21 s, final 0.12 m, overshoot 0.75 m, brake 16.4 m from 8.2 m/s in 4.8 s
+  [confirm-defaults] [defaults] score 17.91: arrive 7.39 s, settled 11.17 s, final 0.12 m, overshoot 0.76 m, brake 15.9 m from 8.1 m/s in 4.7 s
+  [confirm-defaults] [defaults] score 18.02: arrive 7.40 s, settled 11.21 s, final 0.12 m, overshoot 0.76 m, brake 16.2 m from 8.2 m/s in 4.7 s
+  [confirm-best] [PSC_NE_JERK=10, PSC_NE_POS_P=2, PSC_NE_VEL_P=3] score 11.18: arrive 7.47 s, settled 7.88 s, final 0.08 m, overshoot 0.19 m, brake 9.7 m from 8.1 m/s in 3.0 s
+  [confirm-best] [PSC_NE_JERK=10, PSC_NE_POS_P=2, PSC_NE_VEL_P=3] score 11.25: arrive 7.47 s, settled 7.86 s, final 0.07 m, overshoot 0.18 m, brake 10.3 m from 8.3 m/s in 3.1 s
+  [confirm-best] [PSC_NE_JERK=10, PSC_NE_POS_P=2, PSC_NE_VEL_P=3] score 11.13: arrive 7.46 s, settled 7.85 s, final 0.07 m, overshoot 0.19 m, brake 9.7 m from 8.1 m/s in 3.1 s
+  [confirm-best] [PSC_NE_JERK=10, PSC_NE_POS_P=2, PSC_NE_VEL_P=3] score 11.26: arrive 7.46 s, settled 7.85 s, final 0.07 m, overshoot 0.19 m, brake 10.3 m from 8.4 m/s in 3.1 s
+  [confirm-best] [PSC_NE_JERK=10, PSC_NE_POS_P=2, PSC_NE_VEL_P=3] score 11.18: arrive 7.30 s, settled 7.61 s, final 0.05 m, overshoot 0.29 m, brake 9.9 m from 8.2 m/s in 3.1 s
+  [confirm-best] [PSC_NE_JERK=10, PSC_NE_POS_P=2, PSC_NE_VEL_P=3] score 11.26: arrive 7.30 s, settled 7.63 s, final 0.06 m, overshoot 0.29 m, brake 10.1 m from 8.3 m/s in 3.2 s
+  [confirm-best] [PSC_NE_JERK=10, PSC_NE_POS_P=2, PSC_NE_VEL_P=3] score 11.69: arrive 7.30 s, settled 7.99 s, final 0.06 m, overshoot 0.32 m, brake 10.1 m from 8.4 m/s in 3.2 s
+  [confirm-best] [PSC_NE_JERK=10, PSC_NE_POS_P=2, PSC_NE_VEL_P=3] score 11.28: arrive 7.29 s, settled 7.61 s, final 0.06 m, overshoot 0.30 m, brake 10.1 m from 8.4 m/s in 3.1 s
+
+defaults: score 17.96 over 8/8 flights; settle 11.17 s, overshoot 0.76 m, brake 16.2 m
+tuned   : score 11.28 over 8/8 flights; settle 7.78 s, overshoot 0.24 m, brake 10.0 m
+wrote docs/data/sitl/tuning/copter-tuned.parm after 67 s; trials in docs/data/sitl/tuning/confirm-trials.jsonl
+exit 0

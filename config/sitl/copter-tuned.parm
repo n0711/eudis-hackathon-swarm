@@ -1,0 +1,16 @@
+# ArduCopter SITL position-control tune for the eudis-swarm missions.
+# Produced by scripts/sitl_tune.py; SITL quad model ONLY -- never fly a real
+# airframe on these values (AutoTune its rate loops, then tune these).
+# Load with: COPTER_PARAMS=<this file> scripts/sitl-swarm.sh N SPEEDUP
+# Confirmation flights (40 m GUIDED steps; BRAKE from about 8 m/s):
+#   defaults: score 17.78 over 8/8 flights; settle 11.05 s, overshoot 0.72 m, brake 16.9 m
+#   tuned   : score 9.49 over 8/8 flights; settle 6.10 s, overshoot 0.20 m, brake 10.6 m
+#
+ATC_ANGLE_MAX 35
+PSC_NE_JERK 10
+PSC_NE_POS_P 2
+PSC_NE_VEL_D 0.25
+PSC_NE_VEL_I 1.5
+PSC_NE_VEL_P 2
+WP_ACC 5
+WP_JERK 1

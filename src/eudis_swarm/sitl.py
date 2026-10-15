@@ -15,6 +15,7 @@ Two rules from ``docs/sitl.md`` are enforced here rather than assumed:
 
 from __future__ import annotations
 
+import math
 import time
 from typing import Any
 
@@ -26,6 +27,13 @@ _MISSING_DEPENDENCY = (
     "software-in-the-loop support needs pymavlink, which is an optional extra. "
     'Install it with: pip install -e ".[sitl]"'
 )
+
+
+def _param_id(name: str) -> str:
+    if not isinstance(name, str) or not name or len(name) > 16:
+        raise ValueError("a parameter name is 1-16 characters")
+    return name.upper()
+
 
 #: Upper bound on one backlog drain, so a link streaming faster than it can be
 #: read still returns control.
@@ -88,6 +96,7 @@ class SitlVehicle:
         self._altitude_m = 0.0
         self._cruise_altitude_m: float | None = None
         self._vehicle_time_s = 0.0
+        self._velocity: Position = (0.0, 0.0)
 
     @property
     def connected(self) -> bool:
@@ -197,7 +206,114 @@ class SitlVehicle:
         self._position = self._frame.to_local((latitude, longitude))
         self._altitude_m = message.relative_alt / 1000.0
         self._vehicle_time_s = message.time_boot_ms / 1000.0
+        # GLOBAL_POSITION_INT carries cm/s north (vx) and east (vy); the
+        # local frame is east/north.
+        self._velocity = (
+            float(getattr(message, "vy", 0)) / 100.0,
+            float(getattr(message, "vx", 0)) / 100.0,
+        )
         return True
+
+    @property
+    def velocity(self) -> Position:
+        """Ground velocity (east, north) in m/s, from the last position report."""
+
+        return self._velocity
+
+    def record(
+        self, vehicle_seconds: float, *, wall_timeout: float = 120.0
+    ) -> list[tuple[float, float, float, float, float, float]]:
+        """Every position report for ``vehicle_seconds`` of vehicle time.
+
+        Unlike :meth:`observe`, nothing is skipped: each report becomes one
+        ``(t, east, north, altitude, v_east, v_north)`` sample, which is what a
+        step-response or braking measurement needs.
+        """
+
+        if vehicle_seconds < 0.0:
+            raise ValueError("vehicle_seconds must be non-negative")
+        self._require_connection()
+        samples: list[tuple[float, float, float, float, float, float]] = []
+        start: float | None = None
+        deadline = time.monotonic() + wall_timeout
+        while time.monotonic() < deadline:
+            if not self._pump_once():
+                continue
+            first = self._vehicle_time_s if start is None else start
+            start = first
+            samples.append(
+                (
+                    self._vehicle_time_s,
+                    self._position[0],
+                    self._position[1],
+                    self._altitude_m,
+                    self._velocity[0],
+                    self._velocity[1],
+                )
+            )
+            if self._vehicle_time_s - first >= vehicle_seconds:
+                return samples
+        raise TimeoutError(
+            f"recorded only {len(samples)} reports before the wall-clock timeout"
+        )
+
+    def get_param(self, name: str, *, timeout: float = 10.0) -> float:
+        """Read one autopilot parameter, retrying once a second."""
+
+        connection = self._require_connection()
+        wanted = _param_id(name)
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            connection.mav.param_request_read_send(
+                connection.target_system, 1, wanted.encode("ascii"), -1
+            )
+            value = self._await_param(wanted, min(deadline, time.monotonic() + 1.0))
+            if value is not None:
+                return value
+        raise TimeoutError(f"no value for parameter {name} within {timeout:.0f}s")
+
+    def set_param(self, name: str, value: float, *, timeout: float = 10.0) -> float:
+        """Set one autopilot parameter and return the value the autopilot reports.
+
+        The autopilot answers a PARAM_SET with PARAM_VALUE; that echo, not the
+        request, is what is returned, so a refused or clamped value is visible.
+        """
+
+        if not isinstance(value, (int, float)) or not math.isfinite(value):
+            raise ValueError("parameter value must be a finite number")
+        connection = self._require_connection()
+        mavutil = _require_mavutil()
+        wanted = _param_id(name)
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            connection.mav.param_set_send(
+                connection.target_system,
+                1,
+                wanted.encode("ascii"),
+                float(value),
+                mavutil.mavlink.MAV_PARAM_TYPE_REAL32,
+            )
+            echoed = self._await_param(wanted, min(deadline, time.monotonic() + 1.0))
+            if echoed is not None and math.isclose(
+                echoed, float(value), rel_tol=1e-5, abs_tol=1e-6
+            ):
+                return echoed
+        raise TimeoutError(f"parameter {name} was not confirmed as {value}")
+
+    def _await_param(self, wanted: str, until: float) -> float | None:
+        assert self._connection is not None
+        while time.monotonic() < until:
+            message = self._connection.recv_match(
+                type="PARAM_VALUE", blocking=True, timeout=0.5
+            )
+            if message is None:
+                continue
+            name = message.param_id
+            if isinstance(name, bytes):
+                name = name.decode("ascii", "replace")
+            if name.rstrip("\x00") == wanted:
+                return float(message.param_value)
+        return None
 
     def observe(self, duration: float = 0.0) -> Position:
         """Drain telemetry for ``duration`` seconds and return the newest position."""

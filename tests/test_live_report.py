@@ -440,3 +440,17 @@ def test_the_report_summarises_each_file_on_its_own_and_checks_them(
         write_jsonl(point_mass, stream)
     assert main(["--check", str(alone)]) == 1
     assert "no live run in this log" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("run", ["tuned1", "tuned2", "tuned3"])
+def test_the_recorded_tuned_flights_meet_the_card_and_fly_faster(run: str) -> None:
+    """docs/sitl.md cites these: LT3 with config/sitl/copter-tuned.parm."""
+
+    from eudis_swarm.live_mission import read_jsonl
+
+    tuned_dir = RECORDED.parent / "phase5-tuned"
+    with (tuned_dir / f"{run}.jsonl").open(encoding="utf-8") as stream:
+        live, baseline = split_live_and_baseline(summarize(read_jsonl(stream)))
+    assert live is not None and baseline is not None
+    assert all(result.passed for result in check_test_card(live, baseline))
+    assert live.mission_time_s < 14.25  # every recorded stock-parameter run

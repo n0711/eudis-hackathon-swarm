@@ -128,7 +128,7 @@ def test_distance_is_measured_in_local_metres() -> None:
 
 
 class _Message:
-    def __init__(self, kind: str, **fields: float) -> None:
+    def __init__(self, kind: str, **fields: object) -> None:
         self._kind = kind
         self.__dict__.update(fields)
 
@@ -344,3 +344,102 @@ def test_two_vehicles_with_different_homes_share_one_frame(monkeypatch) -> None:
     alone._connection = _FakeConnection([_position(1000, 35.1264, 33.4302)])  # noqa: SLF001
     alone.observe()
     assert alone.position == (0.0, 0.0)
+
+
+class _ParamConnection(_FakeConnection):
+    """Echoes PARAM_SET as PARAM_VALUE, optionally clamped or never."""
+
+    def __init__(
+        self, queue: list[_Message], *, clamp: float | None = None, echo: bool = True
+    ) -> None:
+        super().__init__(queue)
+        self.params: dict[str, float] = {"PSC_NE_POS_P": 1.0}
+        self.clamp = clamp
+        self.echo = echo
+
+    def param_set_send(
+        self, _system, _component, name: bytes, value: float, _type
+    ) -> None:
+        stored = value if self.clamp is None else min(value, self.clamp)
+        self.params[name.decode()] = stored
+        if self.echo:
+            self.queue.append(
+                _Message("PARAM_VALUE", param_id=name.decode(), param_value=stored)
+            )
+
+    def param_request_read_send(self, _system, _component, name: bytes, _index) -> None:
+        key = name.decode()
+        if key in self.params and self.echo:
+            self.queue.append(
+                _Message(
+                    "PARAM_VALUE",
+                    param_id=key.encode() + b"\x00\x00",
+                    param_value=self.params[key],
+                )
+            )
+
+
+class _FakeParamMavutil(_FakeMavutil):
+    class mavlink(_FakeMavutil.mavlink):  # noqa: N801
+        MAV_PARAM_TYPE_REAL32 = 9
+
+
+def test_set_param_returns_the_autopilots_own_echo(monkeypatch) -> None:
+    import eudis_swarm.sitl as sitl
+
+    monkeypatch.setattr(sitl, "_require_mavutil", lambda: _FakeParamMavutil)
+    vehicle = SitlVehicle("tcp:127.0.0.1:5760")
+    vehicle._connection = _ParamConnection([])  # noqa: SLF001
+    assert vehicle.set_param("psc_ne_pos_p", 2.0) == 2.0
+    assert vehicle.get_param("PSC_NE_POS_P") == 2.0  # null-padded bytes id decoded
+
+    clamped = SitlVehicle("tcp:127.0.0.1:5760")
+    clamped._connection = _ParamConnection([], clamp=1.5)  # noqa: SLF001
+    with pytest.raises(TimeoutError, match="not confirmed"):
+        clamped.set_param("PSC_NE_POS_P", 2.0, timeout=0.3)
+    silent = SitlVehicle("tcp:127.0.0.1:5760")
+    silent._connection = _ParamConnection([], echo=False)  # noqa: SLF001
+    with pytest.raises(TimeoutError, match="no value"):
+        silent.get_param("PSC_NE_POS_P", timeout=0.3)
+
+
+@pytest.mark.parametrize(
+    ("name", "value", "message"),
+    [
+        ("", 1.0, "1-16 characters"),
+        ("X" * 17, 1.0, "1-16"),
+        ("OK", float("inf"), "finite"),
+    ],
+)
+def test_set_param_validates_its_arguments(
+    name: str, value: float, message: str
+) -> None:
+    vehicle = SitlVehicle("tcp:127.0.0.1:5760")
+    vehicle._connection = _ParamConnection([])  # noqa: SLF001
+    with pytest.raises(ValueError, match=message):
+        vehicle.set_param(name, value)
+
+
+def _moving(time_ms: int, lat: float, vx: int, vy: int) -> _Message:
+    message = _position(time_ms, lat, 33.0)
+    message.vx, message.vy = vx, vy  # type: ignore[attr-defined]
+    return message
+
+
+def test_record_keeps_every_report_with_velocity_in_east_north() -> None:
+    vehicle = _connected(
+        [
+            _moving(1000, 35.0, 100, 300),
+            _Message("HEARTBEAT"),
+            _moving(1100, 35.00001, 100, 300),
+            _moving(1200, 35.00002, 0, -50),
+        ]
+    )
+    samples = vehicle.record(0.15)
+    assert [round(s[0], 3) for s in samples] == [1.0, 1.1, 1.2]
+    assert samples[0][4:] == (3.0, 1.0)  # (east = vy, north = vx) in m/s
+    assert vehicle.velocity == (-0.5, 0.0)
+    with pytest.raises(ValueError, match="non-negative"):
+        vehicle.record(-1.0)
+    with pytest.raises(TimeoutError, match="recorded only"):
+        _connected([]).record(5.0, wall_timeout=0.05)
