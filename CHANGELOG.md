@@ -17,6 +17,18 @@ and interfaces change between prototypes.
   BQM/Ising exports. `eudis-swarm-quantum-study` runs the paired comparison;
   results, limits and raw CSV in `docs/quantum_optimisation.md`. This is
   classical simulation; no quantum speedup is claimed.
+- QAOA rework (`--qaoa-mixer assignment|xy|x`, default `assignment`): the
+  default ansatz stays inside feasible assignments (swap and move mixer terms,
+  no penalty), an XY one-hot ansatz with a provably sufficient `c_max + 1`
+  penalty and the textbook ansatz remain for comparison. Decoding samples 64
+  seeded shots instead of reading the most probable bitstrings, which only a
+  simulator can do. Depth 4, formulations of 3 UAVs × 4 objectives. In the
+  re-run 480-run study QAOA returned the optimum in 915 of 923 solves; at
+  12 qubits it puts 14× the probability of random feasible sampling on the
+  optimum. Mission time is not significantly changed against distance
+  (33 faster / 27 slower); flight distance about 1.4 % lower. The 2 October
+  figures, whose "all optimal" relied on that statevector read-out, are
+  superseded.
 - Coordinated area search (`eudis-swarm-search`, `search_mission.py`): the
   area is cut into lawnmower-ordered sectors that the existing claim protocol
   allocates; the observer measures coverage over time from mission events. A
