@@ -46,7 +46,7 @@ def load(path: Path) -> tuple[RunSummary, RunSummary, list]:
 
 def write_csv(name: str, header: list[str], rows: list[tuple]) -> None:
     with (OUT / name).open("w", newline="", encoding="utf-8") as stream:
-        writer = csv.writer(stream)
+        writer = csv.writer(stream, lineterminator="\n")
         writer.writerow(header)
         writer.writerows(rows)
 

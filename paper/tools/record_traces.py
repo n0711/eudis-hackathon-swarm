@@ -35,7 +35,7 @@ def settle_at(vehicle: SitlVehicle, target: tuple[float, float]) -> None:
 
 def write(path: Path, rows: list[tuple[float, ...]], header: list[str]) -> None:
     with path.open("w", newline="", encoding="utf-8") as stream:
-        writer = csv.writer(stream)
+        writer = csv.writer(stream, lineterminator="\n")
         writer.writerow(header)
         writer.writerows(rows)
 
