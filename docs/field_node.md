@@ -581,8 +581,14 @@ here.
   round. The two paths should share one adapter once the SITL workstream
   settles its interface.
 - **src/eudis_swarm/mavlink_backend.py:** `MavlinkFieldVehicle` uses only its
-  `VehicleTelemetry` protocol. If that protocol changes, the field adapter
-  and `tests/test_field_node.py::test_point_mass_and_mavlink_vehicles` must
+  `VehicleTelemetry` protocol, including the `hold(mode)` the multi-vehicle
+  SITL work added. A fail-stopped node calls `hold("BRAKE")` once, which is
+  the same safe-hold rule as `MavlinkBackend`'s fail-stop, and logs whether
+  the autopilot confirmed it as `vehicle_hold_confirmed`. Stand-down from a
+  lost task deliberately does *not* change mode. It sends a setpoint at the
+  current position instead, so the vehicle stays in GUIDED and can fly the
+  next task. If the protocol changes, the field adapter and
+  `tests/test_field_node.py::test_point_mass_and_mavlink_vehicles` must
   follow.
 - **AGENTS.md / CONTRIBUTING.md:** worth one line saying `field_*` modules are
   non-deterministic harness code outside the simulator's import graph,

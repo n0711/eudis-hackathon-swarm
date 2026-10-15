@@ -103,7 +103,13 @@ class FieldVehicle(Protocol):
 
     def move_toward(self, target: Position, elapsed: float) -> Position: ...
 
-    def hold(self) -> None: ...
+    def hold(self) -> None:
+        """Stop where it is but stay commandable (stand-down from a task)."""
+        ...
+
+    def fail_stop(self) -> bool | None:
+        """Stop for good; ``True``/``False`` if an autopilot confirmed it."""
+        ...
 
 
 class PointMassVehicle:
@@ -128,6 +134,10 @@ class PointMassVehicle:
         return self._position
 
     def hold(self) -> None:
+        return None
+
+    def fail_stop(self) -> bool | None:
+        # a point mass only moves when told to; nothing to confirm.
         return None
 
 
@@ -172,9 +182,23 @@ class MavlinkFieldVehicle:
         return self.position
 
     def hold(self) -> None:
+        # a position setpoint at the current position, not a mode change: the
+        # node may bind another task next round and needs GUIDED to fly it.
         self._telemetry.observe(0.0)
         self._telemetry.command_toward(self._telemetry.position)
         self._last_target = None
+
+    def fail_stop(self) -> bool | None:
+        """Put the aircraft into the autopilot's safe hold (BRAKE), airborne.
+
+        A fail-stopped node never commands again, so a mode change is right
+        here: otherwise the vehicle would keep flying to its last setpoint
+        while its controller is "gone". Same safe-hold rule as
+        :class:`~eudis_swarm.mavlink_backend.MavlinkBackend`'s fail-stop.
+        """
+
+        self._last_target = None
+        return self._telemetry.hold("BRAKE")
 
 
 def open_mavlink_vehicle(
@@ -702,8 +726,8 @@ class FieldNode:
         if self._faults.fail_stop_due(now):
             self.fail_stopped = True
             self.stopped = True
-            self._vehicle.hold()
-            self._record("FAIL_STOP", now)
+            confirmed = self._vehicle.fail_stop()
+            self._record("FAIL_STOP", now, vehicle_hold_confirmed=confirmed)
             return False
         if self._faults.refresh(now):
             self._record("FILTER_CHANGED", now, blocked=sorted(self._faults.blocked))

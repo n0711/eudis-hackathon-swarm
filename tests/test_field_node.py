@@ -220,7 +220,8 @@ def test_fail_stop_silences_a_node_and_survivors_declare_it() -> None:
     swarm.run(8.0)
     swarm.stop()
     assert swarm.nodes[4].fail_stopped and swarm.nodes[4].step() is False
-    assert swarm.kinds(4, "FAIL_STOP")
+    (stop,) = swarm.kinds(4, "FAIL_STOP")
+    assert stop["vehicle_hold_confirmed"] is None  # point mass: nothing to confirm
     for agent_id in (1, 2, 3):
         store = swarm.nodes[agent_id].peer_store
         assert store.status_for(4) is PeerStatus.DECLARED_FAILED
@@ -247,6 +248,7 @@ def test_point_mass_and_mavlink_vehicles() -> None:
             self.position = (0.0, 0.0)
             self.vehicle_time_s = 0.0
             self.commands: list[tuple[float, float]] = []
+            self.modes: list[str] = []
 
         def command_toward(self, target: tuple[float, float]) -> None:
             self.commands.append(target)
@@ -256,6 +258,7 @@ def test_point_mass_and_mavlink_vehicles() -> None:
             return self.position
 
         def hold(self, mode: str = "BRAKE") -> bool:
+            self.modes.append(mode)
             return True
 
     telemetry = Telemetry()
@@ -269,7 +272,15 @@ def test_point_mass_and_mavlink_vehicles() -> None:
     live.move_toward((110.0, 50.0), 1.0)
     assert len(telemetry.commands) == 2
     live.hold()
+    # standing down keeps GUIDED: a setpoint at the current position.
     assert telemetry.commands[-1] == telemetry.position
+    assert telemetry.modes == []
+    # fail-stop uses the autopilot's safe hold, once, and sends no setpoint.
+    commands_before = len(telemetry.commands)
+    assert live.fail_stop() is True
+    assert telemetry.modes == ["BRAKE"]
+    assert len(telemetry.commands) == commands_before
+    assert vehicle.fail_stop() is None
 
 
 def test_field_modules_stay_out_of_the_simulator_import_graph() -> None:
