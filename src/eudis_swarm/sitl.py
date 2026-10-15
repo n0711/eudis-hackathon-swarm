@@ -27,6 +27,10 @@ _MISSING_DEPENDENCY = (
     'Install it with: pip install -e ".[sitl]"'
 )
 
+#: Upper bound on one backlog drain, so a link streaming faster than it can be
+#: read still returns control.
+_MAX_DRAIN_MESSAGES = 1000
+
 #: Position-only setpoints: every velocity, acceleration and yaw field ignored.
 _POSITION_ONLY_TYPE_MASK = 0b0000111111111000
 
@@ -46,9 +50,11 @@ def _require_mavutil() -> Any:
 class SitlVehicle:
     """One ArduPilot vehicle, commanded and observed in local east/north metres.
 
-    The local frame is fixed to wherever the vehicle first reports itself, so
-    the simulator's ``(0.0, 0.0)`` is the vehicle's own starting point and no
-    coordinates have to be agreed in advance.
+    By default the local frame is fixed to wherever the vehicle first reports
+    itself, so the simulator's ``(0.0, 0.0)`` is the vehicle's own starting
+    point and no coordinates have to be agreed in advance. Several vehicles
+    flown together pass one shared ``origin`` instead, so that one local
+    metre means the same place for all of them.
     """
 
     #: Read by any caller that produces published numbers. Always False.
@@ -60,6 +66,7 @@ class SitlVehicle:
         *,
         stream_rate_hz: int = 5,
         timeout: float = 30.0,
+        origin: tuple[float, float] | None = None,
     ) -> None:
         if not isinstance(connection_string, str) or not connection_string:
             raise ValueError("connection_string must be a non-empty string")
@@ -71,9 +78,15 @@ class SitlVehicle:
         self.stream_rate_hz = stream_rate_hz
         self.timeout = timeout
         self._connection: Any = None
-        self._frame: LocalFrame | None = None
+        # A shared origin puts several vehicles in one frame, so their local
+        # positions are directly comparable; without one, each vehicle's frame
+        # is pinned to wherever it first reports itself.
+        self._frame: LocalFrame | None = (
+            None if origin is None else LocalFrame(origin[0], origin[1])
+        )
         self._position: Position = (0.0, 0.0)
         self._altitude_m = 0.0
+        self._cruise_altitude_m: float | None = None
         self._vehicle_time_s = 0.0
 
     @property
@@ -146,6 +159,32 @@ class SitlVehicle:
         message = self._connection.recv_match(
             type="GLOBAL_POSITION_INT", blocking=True, timeout=2
         )
+        return self._apply_position(message)
+
+    def _pump_latest(self) -> bool:
+        """Drain every queued position report, keeping only the newest.
+
+        A link that has not been read for a while holds a backlog, and reading
+        one message from it returns the *oldest*. When several vehicles are
+        stepped in turn that backlog is the normal case, so reporting the head
+        of the queue would present seconds-old telemetry as current. Block for
+        one message only when nothing at all is queued.
+        """
+
+        assert self._connection is not None
+        updated = False
+        for _ in range(_MAX_DRAIN_MESSAGES):
+            message = self._connection.recv_match(
+                type="GLOBAL_POSITION_INT", blocking=False
+            )
+            if message is None:
+                break
+            updated = self._apply_position(message) or updated
+        if updated:
+            return True
+        return self._pump_once()
+
+    def _apply_position(self, message: Any) -> bool:
         if message is None:
             return False
         latitude = message.lat / 1e7
@@ -161,15 +200,15 @@ class SitlVehicle:
         return True
 
     def observe(self, duration: float = 0.0) -> Position:
-        """Drain telemetry for ``duration`` seconds and return the position."""
+        """Drain telemetry for ``duration`` seconds and return the newest position."""
 
         if duration < 0.0:
             raise ValueError("duration must be non-negative")
         self._require_connection()
         deadline = time.monotonic() + duration
-        self._pump_once()
+        self._pump_latest()
         while time.monotonic() < deadline:
-            self._pump_once()
+            self._pump_latest()
         return self._position
 
     def command_toward(
@@ -182,7 +221,14 @@ class SitlVehicle:
         if self._frame is None:
             raise RuntimeError("the local frame is not fixed yet; call connect() first")
         latitude, longitude = self._frame.to_global(target)
-        altitude = self._altitude_m if altitude_m is None else altitude_m
+        # Re-commanding the *measured* altitude every step lets small errors
+        # accumulate into a slow climb or sink; hold the takeoff altitude.
+        if altitude_m is not None:
+            altitude = altitude_m
+        elif self._cruise_altitude_m is not None:
+            altitude = self._cruise_altitude_m
+        else:
+            altitude = self._altitude_m
         connection.mav.set_position_target_global_int_send(
             0,
             connection.target_system,
@@ -256,6 +302,7 @@ class SitlVehicle:
             0,
             altitude_m,
         )
+        self._cruise_altitude_m = altitude_m
         climb_deadline = time.monotonic() + settle_timeout
         while time.monotonic() < climb_deadline:
             self._pump_once()
@@ -264,6 +311,60 @@ class SitlVehicle:
         raise TimeoutError(
             f"reached only {self._altitude_m:.1f} m of a {altitude_m:.1f} m takeoff"
         )
+
+    @property
+    def flight_mode(self) -> str | None:
+        """The autopilot's mode name from its last heartbeat, if known."""
+
+        if self._connection is None:
+            return None
+        mode = getattr(self._connection, "flightmode", None)
+        return mode if isinstance(mode, str) else None
+
+    def set_mode(self, mode: str, *, timeout: float = 5.0) -> bool:
+        """Request a flight mode and report whether the autopilot confirmed it.
+
+        The request is repeated once a second until a heartbeat reports the
+        mode or ``timeout`` wall-clock seconds pass. ``False`` is a result, not
+        an exception: a caller stopping a vehicle wants to record that the
+        confirmation never came, not lose the record to a traceback.
+        """
+
+        if not isinstance(mode, str) or not mode:
+            raise ValueError("mode must be a non-empty string")
+        if timeout <= 0.0:
+            raise ValueError("timeout must be positive")
+        connection = self._require_connection()
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            connection.set_mode(mode)
+            resend_at = min(deadline, time.monotonic() + 1.0)
+            while time.monotonic() < resend_at:
+                # Position reports read while waiting are applied, not thrown
+                # away, so the position after a mode change is current.
+                message = connection.recv_match(
+                    type=["HEARTBEAT", "GLOBAL_POSITION_INT"],
+                    blocking=True,
+                    timeout=0.5,
+                )
+                if message is not None and message.get_type() == "GLOBAL_POSITION_INT":
+                    self._apply_position(message)
+                if self.flight_mode == mode:
+                    self._pump_latest()
+                    return True
+        return self.flight_mode == mode
+
+    def hold(self, mode: str = "BRAKE") -> bool:
+        """Stop horizontal motion and hold position, staying airborne.
+
+        This is the SITL-side fail-stop: a simulated failure must actually
+        stop the aircraft rather than leave it flying to its last setpoint.
+        ArduCopter's BRAKE stops hardest; LOITER is gentler. Both hover.
+        """
+
+        if mode not in ("BRAKE", "LOITER"):
+            raise ValueError("mode must be BRAKE or LOITER")
+        return self.set_mode(mode)
 
     def distance_to(self, target: Position) -> float:
         east = target[0] - self._position[0]

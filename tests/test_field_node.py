@@ -255,6 +255,9 @@ def test_point_mass_and_mavlink_vehicles() -> None:
             self.position = (self.position[0] + 1.0, self.position[1])
             return self.position
 
+        def hold(self, mode: str = "BRAKE") -> bool:
+            return True
+
     telemetry = Telemetry()
     live = MavlinkFieldVehicle(telemetry, (100.0, 50.0), command_interval=1.0)
     assert live.deterministic is False

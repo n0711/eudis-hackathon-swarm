@@ -8,6 +8,16 @@ and interfaces change between prototypes.
 ## [Unreleased]
 
 ### Added
+- Coordinated area search (`eudis-swarm-search`, `search_mission.py`): the
+  area is cut into lawnmower-ordered sectors that the existing claim protocol
+  allocates; the observer measures coverage over time from mission events. A
+  64-run paired study (`docs/search_mission.md`, raw CSV in `docs/data/`):
+  with clean links the central coordinator reaches full coverage 0.8 s sooner
+  on average; under jamming it leaves a sector unsearched in 2 of 16 runs,
+  while the distributed search covers every sector in all 16, at the cost of
+  67 redundant sector searches against 27.
+- `docs/challenge2_coverage.md`: each Challenge 2 requirement (official and
+  Cyprus-edition text) mapped to code, evidence and gaps.
 - `docs/trl4_validation.md`: the readiness scale used, per-component status,
   the criteria under which a TRL4 claim is justified, seven laboratory test
   cards for equipment day, and an evidence log to be filled only from
