@@ -9,6 +9,8 @@ from pathlib import Path
 import pytest
 
 from eudis_swarm.quantum_study import (
+    ANSATZ_COLUMNS,
+    ANSATZ_SUMMARY_COLUMNS,
     POLICIES,
     RUN_COLUMNS,
     SOLVE_COLUMNS,
@@ -128,6 +130,14 @@ def test_main_writes_timing_and_stdout(
                 "connected",
                 "--timing-output",
                 str(timing),
+                "--ansatz-output",
+                str(tmp_path / "ansatz.csv"),
+                "--ansatz-summary-output",
+                str(tmp_path / "ansatz_summary.csv"),
+                "--ansatz-stride",
+                "1000",
+                "--ansatz-depth",
+                "1",
             ]
         )
         == 0
@@ -137,12 +147,34 @@ def test_main_writes_timing_and_stdout(
     assert len(printed) == 1 + len(POLICIES)
     rows = _read(timing)
     assert list(rows[0]) == list(TIMING_COLUMNS)
-    assert {row["solver"] for row in rows} == {"brute_force", "qaoa", "sqa"}
+    assert {row["solver"] for row in rows} == {
+        "brute_force",
+        "qaoa",
+        "sqa",
+        "qaoa_xy",
+        "qaoa_x",
+    }
+    # Stride 1000 samples exactly the first recorded QAOA-run problem.
+    ansatz = _read(tmp_path / "ansatz.csv")
+    assert list(ansatz[0]) == list(ANSATZ_COLUMNS)
+    assert [row["ansatz"] for row in ansatz] == ["assignment", "xy", "x"]
+    assert len({row["timestamp"] for row in ansatz}) == 1
+    assert all(row["depth"] == "1" for row in ansatz)
+    summary = _read(tmp_path / "ansatz_summary.csv")
+    assert list(summary[0]) == list(ANSATZ_SUMMARY_COLUMNS)
+    assert [row["ansatz"] for row in summary] == ["assignment", "xy", "x"]
+    assert all(row["problems"] == "1" for row in summary)
+    # Every state of the assignment ansatz is a feasible assignment.
+    assert ansatz[0]["feasible_probability"] == "1.000000"
 
 
 def test_main_rejects_bad_seed_arguments() -> None:
     with pytest.raises(SystemExit):
         main(["--seeds", "0"])
+    with pytest.raises(SystemExit):
+        main(["--ansatz-stride", "0"])
+    with pytest.raises(SystemExit):
+        main(["--ansatz-depth", "0"])
 
 
 def test_summary_counts_paired_differences() -> None:

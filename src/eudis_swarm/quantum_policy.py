@@ -70,7 +70,7 @@ class QuantumAllocationPolicy:
 
     solver: str = "qaoa"
     max_agents: int = 3
-    max_objectives: int = 3
+    max_objectives: int = 4
     qaoa: QaoaSettings = field(default_factory=QaoaSettings)
     sqa: SqaSettings = field(default_factory=SqaSettings)
 

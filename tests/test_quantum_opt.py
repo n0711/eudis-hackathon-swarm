@@ -12,6 +12,8 @@ import pytest
 
 from eudis_swarm.quantum_opt import (
     MAX_QAOA_QUBITS,
+    MAX_QAOA_SUBSPACE,
+    QAOA_MIXERS,
     AssignmentProblem,
     QaoaSettings,
     Qubo,
@@ -19,6 +21,8 @@ from eudis_swarm.quantum_opt import (
     assignment_qubo,
     derive_seed,
     feasible_assignment_count,
+    one_hot_cost_qubo,
+    one_hot_groups,
     qaoa_statevector,
     qubo_brute_force_minimum,
     qubo_to_bqm,
@@ -219,13 +223,24 @@ def test_qaoa_is_deterministic_and_bounded() -> None:
     assert solve_qaoa(problem) == solve_qaoa(problem)
     big = _random_problem(random.Random(4), 3, 6)
     assert big.num_variables > MAX_QAOA_QUBITS
+    # The constrained ansatzes evolve only reachable states: 120 here.
+    assert solve_qaoa(big, QaoaSettings(depth=1)).feasible
     with pytest.raises(ValueError):
-        solve_qaoa(big)
+        solve_qaoa(big, QaoaSettings(mixer="x"))
+    huge = _random_problem(random.Random(4), 5, 9)  # 15120 assignments
+    assert feasible_assignment_count(huge) > MAX_QAOA_SUBSPACE
+    with pytest.raises(ValueError):
+        solve_qaoa(huge)
+    with pytest.raises(ValueError):
+        solve_qaoa(_random_problem(random.Random(4), 4, 9), QaoaSettings(mixer="xy"))
 
 
 def test_qaoa_reports_infeasible_when_nothing_decodes() -> None:
     problem = _random_problem(random.Random(4), 3, 3)
-    shallow = solve_qaoa(problem, QaoaSettings(depth=0, decode_candidates=1))
+    shallow = solve_qaoa(
+        problem,
+        QaoaSettings(mixer="x", depth=0, decode="top_k", decode_candidates=1),
+    )
     # depth 0 is uniform: the lowest-index bitstring (all zeros) is decoded.
     assert not shallow.feasible
     assert shallow.assignment == ()
@@ -369,3 +384,181 @@ def test_optimiser_modules_import_no_world_or_store_state() -> None:
         assert not any(module.startswith("eudis_swarm") for module in plain), name
         # Standard library only; no numerical or quantum SDK in the core.
         assert plain <= {"hashlib", "math", "random"}, name
+
+
+# --- constrained ansatzes ------------------------------------------------------
+
+
+def _reference_xy_probabilities(
+    problem: AssignmentProblem, gammas: list[float], betas: list[float]
+) -> dict[tuple[int, ...], float]:
+    """Full 2**n statevector with explicit W states and pairwise XY gates."""
+
+    n = problem.num_variables
+    groups = one_hot_groups(problem)
+    cost = one_hot_cost_qubo(problem)
+    states = _all_bits(n)
+    amplitude: dict[tuple[int, ...], complex] = {bits: 0j for bits in states}
+    for bits in states:
+        if all(sum(bits[i] for i in group) == 1 for group in groups):
+            amplitude[bits] = 1.0
+    norm = math.sqrt(sum(abs(value) ** 2 for value in amplitude.values()))
+    amplitude = {bits: value / norm for bits, value in amplitude.items()}
+    raw = {bits: cost.energy(bits) for bits in states}
+    reachable = [bits for bits in states if amplitude[bits] != 0]
+    low = min(raw[bits] for bits in reachable)
+    span = max(raw[bits] for bits in reachable) - low
+    for gamma, beta in zip(gammas, betas):
+        amplitude = {
+            bits: value
+            * complex(
+                math.cos(gamma * (raw[bits] - low) / span),
+                -math.sin(gamma * (raw[bits] - low) / span),
+            )
+            for bits, value in amplitude.items()
+        }
+        for group in groups:
+            size = len(group)
+            edges = [(m, m + 1) for m in range(size - 1)]
+            if size > 2:
+                edges.append((size - 1, 0))
+            for left, right in edges:
+                i, j = group[left], group[right]
+                updated = dict(amplitude)
+                for bits, value in amplitude.items():
+                    if bits[i] == 1 and bits[j] == 0:
+                        partner = list(bits)
+                        partner[i], partner[j] = 0, 1
+                        other = amplitude[tuple(partner)]
+                        c, s = math.cos(beta), math.sin(beta)
+                        updated[bits] = c * value - 1j * s * other
+                        updated[tuple(partner)] = c * other - 1j * s * value
+                amplitude = updated
+    return {bits: abs(value) ** 2 for bits, value in amplitude.items()}
+
+
+@pytest.mark.parametrize("shape", [(2, 3), (3, 2), (2, 2)])
+def test_xy_subspace_simulation_equals_full_statevector(
+    shape: tuple[int, int],
+) -> None:
+    from eudis_swarm import quantum_opt
+
+    problem = _random_problem(random.Random(31), *shape)
+    gammas, betas = [0.7, 2.1], [0.4, 1.3]
+    ansatz = quantum_opt._xy_ansatz(problem)
+    cost = one_hot_cost_qubo(problem)
+    raw = [cost.energy(bits) for bits in ansatz.states]
+    low, span = min(raw), max(raw) - min(raw)
+    real, imag = quantum_opt._evolve(
+        [(value - low) / span for value in raw], ansatz.mixer_layers, gammas, betas
+    )
+    reference = _reference_xy_probabilities(problem, gammas, betas)
+    subspace = {
+        bits: re * re + im * im for bits, re, im in zip(ansatz.states, real, imag)
+    }
+    for bits, probability in reference.items():
+        assert subspace.get(bits, 0.0) == pytest.approx(probability, abs=1e-12)
+
+
+@pytest.mark.parametrize("shape", [(1, 3), (3, 1), (2, 3), (3, 2), (3, 3), (3, 4)])
+def test_assignment_ansatz_stays_feasible_and_unitary(shape: tuple[int, int]) -> None:
+    from eudis_swarm import quantum_opt
+
+    problem = _random_problem(random.Random(32), *shape)
+    ansatz = quantum_opt._assignment_ansatz(problem)
+    assert len(ansatz.states) == feasible_assignment_count(problem)
+    assert len(set(ansatz.states)) == len(ansatz.states)
+    assert all(problem.decode(bits) is not None for bits in ansatz.states)
+    for layer in ansatz.mixer_layers:
+        touched = [index for pair in layer for index in pair]
+        # Disjoint pairs: each term is an exact set of two-level rotations.
+        assert len(touched) == len(set(touched))
+    energies = [index / len(ansatz.states) for index in range(len(ansatz.states))]
+    real, imag = quantum_opt._evolve(energies, ansatz.mixer_layers, [], [])
+    assert [re * re + im * im for re, im in zip(real, imag)] == pytest.approx(
+        [1 / len(ansatz.states)] * len(ansatz.states)
+    )
+    real, imag = quantum_opt._evolve(
+        energies, ansatz.mixer_layers, [1.1, 0.3, 2.0], [0.9, 2.2, 0.1]
+    )
+    assert sum(re * re + im * im for re, im in zip(real, imag)) == pytest.approx(1.0)
+
+
+@pytest.mark.parametrize("shape", SHAPES)
+def test_one_hot_penalty_is_sufficient_inside_the_subspace(
+    shape: tuple[int, int],
+) -> None:
+    rng = random.Random(hash(("one-hot", shape)) & 0xFFFF)
+    for _ in range(4):
+        problem = _random_problem(rng, *shape, leads=True)
+        cost = one_hot_cost_qubo(problem)
+        groups = one_hot_groups(problem)
+        subspace = [
+            bits
+            for bits in _all_bits(problem.num_variables)
+            if all(sum(bits[i] for i in group) == 1 for group in groups)
+        ]
+        best = min(subspace, key=cost.energy)
+        assert problem.decode(best) is not None
+        assert cost.energy(best) == pytest.approx(solve_brute_force(problem).cost)
+        assert {value for _, _, value in cost.quadratic} <= {
+            max(max(row) for row in problem.costs) + 1.0
+        }
+
+
+def test_every_ansatz_solves_a_tiny_instance_and_reports_probabilities() -> None:
+    problem = assignment_qubo(
+        [(1, (0.0, 0.0)), (2, (100.0, 0.0))],
+        [TaskObjective(7, (10.0, 0.0)), TaskObjective(8, (90.0, 0.0))],
+    )
+    for mixer in QAOA_MIXERS:
+        solution = solve_qaoa(problem, QaoaSettings(mixer=mixer))
+        assert solution.assignment == ((1, 7), (2, 8)), mixer
+        assert solution.ground_probability is not None
+        assert 0.0 < solution.ground_probability <= 1.0 + 1e-12
+        assert solution.feasible_probability is not None
+        assert solution.ground_probability <= solution.feasible_probability + 1e-12
+
+
+def test_assignment_ansatz_concentrates_beyond_random_sampling() -> None:
+    # Regression guard for the documented claim: on random 3x3 and 3x4
+    # instances the default ansatz puts several times more single-shot
+    # probability on the optimum than uniform sampling of feasible
+    # assignments, and the textbook ansatz does not.
+    rng = random.Random(77)
+    for shape, factor in (((3, 3), 3.0), ((3, 4), 5.0)):
+        problems = [_random_problem(rng, *shape) for _ in range(4)]
+        uniform = 1.0 / feasible_assignment_count(problems[0])
+        ground = [solve_qaoa(problem).ground_probability or 0.0 for problem in problems]
+        assert sum(ground) / len(ground) > factor * uniform
+    problem = _random_problem(random.Random(77), 3, 3)
+    textbook = solve_qaoa(problem, QaoaSettings(mixer="x", depth=2))
+    assert (textbook.ground_probability or 0.0) < 1.0 / 6.0
+
+
+def test_shot_decoding_is_seeded_and_top_k_is_available() -> None:
+    problem = _random_problem(random.Random(33), 3, 3)
+    default = solve_qaoa(problem)
+    assert default == solve_qaoa(problem, seed=derive_seed(problem, salt=1))
+    assert solve_qaoa(problem, seed=5) == solve_qaoa(problem, seed=5)
+    one_shot = solve_qaoa(problem, QaoaSettings(shots=1), seed=5)
+    assert one_shot.feasible  # every assignment-ansatz state is feasible
+    top = solve_qaoa(problem, QaoaSettings(decode="top_k", decode_candidates=1))
+    assert top.probability is not None
+    assert top.probability == pytest.approx(
+        max(
+            solve_qaoa(problem, QaoaSettings(decode="top_k")).probability or 0.0,
+            top.probability,
+        )
+    )
+
+
+def test_qaoa_settings_reject_unknown_options() -> None:
+    with pytest.raises(ValueError):
+        QaoaSettings(mixer="grover")
+    with pytest.raises(ValueError):
+        QaoaSettings(decode="best")
+    with pytest.raises(ValueError):
+        QaoaSettings(shots=0)
+    with pytest.raises(ValueError):
+        QaoaSettings(depth=True)  # type: ignore[arg-type]

@@ -57,7 +57,8 @@ from __future__ import annotations
 import hashlib
 import math
 import random
-from collections.abc import Sequence
+from bisect import bisect_right
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from itertools import permutations
 from typing import TypeAlias
@@ -69,6 +70,9 @@ Position: TypeAlias = tuple[float, float]
 
 #: Largest problem the statevector simulator accepts (2**16 amplitudes).
 MAX_QAOA_QUBITS = 16
+#: Largest basis the constrained ansatzes simulate (they evolve only the
+#: states they can reach, which is exact, so the qubit count may be larger).
+MAX_QAOA_SUBSPACE = 5040
 #: Largest problem simulated quantum annealing accepts.
 MAX_SQA_QUBITS = 256
 #: Largest number of feasible assignments brute force will enumerate.
@@ -301,6 +305,9 @@ class AssignmentSolution:
     probability: float | None = None
     #: QAOA only: final-state probability mass on feasible bitstrings.
     feasible_probability: float | None = None
+    #: QAOA only, simulator diagnostic: probability mass on QUBO minima,
+    #: i.e. the chance a single shot returns an optimal assignment.
+    ground_probability: float | None = None
 
     def task_for(self, agent_id: int) -> int | None:
         for assigned_agent_id, task_id in self.assignment:
@@ -317,6 +324,7 @@ def _solution(
     *,
     probability: float | None = None,
     feasible_probability: float | None = None,
+    ground_probability: float | None = None,
 ) -> AssignmentSolution:
     pairs = None if bits is None else problem.decode(bits)
     if pairs is None:
@@ -329,6 +337,7 @@ def _solution(
             evaluations=evaluations,
             probability=probability,
             feasible_probability=feasible_probability,
+            ground_probability=ground_probability,
         )
     assert bits is not None
     return AssignmentSolution(
@@ -340,6 +349,7 @@ def _solution(
         evaluations=evaluations,
         probability=probability,
         feasible_probability=feasible_probability,
+        ground_probability=ground_probability,
     )
 
 
@@ -419,31 +429,111 @@ def _diagonal_energies(qubo: Qubo) -> list[float]:
 # --- QAOA on a statevector ---------------------------------------------------
 
 
+QAOA_MIXERS = ("assignment", "xy", "x")
+QAOA_DECODERS = ("shots", "top_k")
+
+
 @dataclass(frozen=True, slots=True)
 class QaoaSettings:
-    """Fixed, documented angle-search budget; no randomness involved."""
+    """Ansatz, fixed angle-search budget and decoding; deterministic."""
 
-    #: Layers. Depth 2 is the default: on 60 random instances of up to 12
-    #: qubits it decoded the exact optimum every time, depth 1 in 33 of 60.
-    depth: int = 2
+    #: ``"assignment"``: the state never leaves the feasible assignments --
+    #: it starts in their uniform superposition and is mixed by "swap" terms
+    #: (two registers exchange targets) and "move" terms (one register hops to
+    #: a target no other register uses), so no penalty is needed at all.
+    #: ``"xy"``: each one-hot register starts in a W state and is mixed by a
+    #: ring of XY (hopping) gates, so only the exactly-one constraints hold by
+    #: construction and the at-most-one penalties remain in the cost.
+    #: ``"x"``: textbook QAOA, ``|+>^n`` and an RX mixer on every qubit.
+    mixer: str = "assignment"
+    #: Layers p.
+    depth: int = 4
     #: Grid points per angle when a layer is introduced.
-    grid_points: int = 8
+    grid_points: int = 12
     #: Coordinate-refinement passes; the step halves after each pass.
     refinement_rounds: int = 4
-    #: Most probable bitstrings evaluated classically during decoding.
+    #: ``"shots"``: sample ``shots`` bitstrings from the final state with a
+    #: seeded generator, as hardware would return them, and keep the best
+    #: feasible sample. ``"top_k"``: evaluate the ``decode_candidates`` most
+    #: probable bitstrings, which only a simulator can know.
+    decode: str = "shots"
+    shots: int = 64
     decode_candidates: int = 8
-    #: Upper end of the gamma grid for energies normalised to [0, 1].
-    gamma_max: float = 4.0 * math.pi
+    #: Upper end of the gamma grid for energies normalised to [0, 1]. Nearly
+    #: degenerate optima need large phase angles to separate; 8 pi with a
+    #: 12-point grid removed the three misses 4 pi with 8 points had.
+    gamma_max: float = 8.0 * math.pi
 
     def __post_init__(self) -> None:
-        if not isinstance(self.depth, int) or self.depth < 0:
+        if self.mixer not in QAOA_MIXERS:
+            raise ValueError(f"QAOA mixer must be one of {QAOA_MIXERS}")
+        if self.decode not in QAOA_DECODERS:
+            raise ValueError(f"QAOA decode must be one of {QAOA_DECODERS}")
+        if (
+            not isinstance(self.depth, int)
+            or isinstance(self.depth, bool)
+            or self.depth < 0
+        ):
             raise ValueError("QAOA depth must be a non-negative integer")
         validate_positive_integer(self.grid_points, name="grid_points")
         if not isinstance(self.refinement_rounds, int) or self.refinement_rounds < 0:
             raise ValueError("refinement_rounds must be a non-negative integer")
+        validate_positive_integer(self.shots, name="shots")
         validate_positive_integer(self.decode_candidates, name="decode_candidates")
         if not self.gamma_max > 0.0:
             raise ValueError("gamma_max must be positive")
+
+
+def _rotate_pairs(
+    real: list[float],
+    imag: list[float],
+    pairs: Iterable[tuple[int, int]],
+    c: float,
+    s: float,
+) -> None:
+    """Apply ``[[c, -i s], [-i s, c]]`` to every amplitude pair in place.
+
+    This is ``exp(-i beta X)`` on one qubit and ``exp(-i beta (XX+YY)/2)`` on
+    the ``|01>, |10>`` block of a qubit pair; both have this form.
+    """
+
+    for k0, k1 in pairs:
+        a_re = real[k0]
+        a_im = imag[k0]
+        b_re = real[k1]
+        b_im = imag[k1]
+        real[k0] = c * a_re + s * b_im
+        imag[k0] = c * a_im - s * b_re
+        real[k1] = c * b_re + s * a_im
+        imag[k1] = c * b_im - s * a_re
+
+
+def _apply_phase(
+    real: list[float], imag: list[float], energies: Sequence[float], gamma: float
+) -> None:
+    for k, energy in enumerate(energies):
+        phase = gamma * energy
+        c = math.cos(phase)
+        s = math.sin(phase)
+        re = real[k]
+        im = imag[k]
+        real[k] = re * c + im * s
+        imag[k] = im * c - re * s
+
+
+def _x_mixer_pairs(n: int) -> list[list[tuple[int, int]]]:
+    size = 1 << n
+    layers: list[list[tuple[int, int]]] = []
+    for qubit in range(n):
+        mask = 1 << qubit
+        layers.append(
+            [
+                (k0, k0 | mask)
+                for block in range(0, size, mask << 1)
+                for k0 in range(block, block + mask)
+            ]
+        )
+    return layers
 
 
 def qaoa_statevector(
@@ -451,7 +541,7 @@ def qaoa_statevector(
     gammas: Sequence[float],
     betas: Sequence[float],
 ) -> tuple[list[float], list[float]]:
-    """Return ``(real, imag)`` amplitudes after ``len(gammas)`` QAOA layers.
+    """Textbook QAOA: ``(real, imag)`` amplitudes after ``len(gammas)`` layers.
 
     Starts in ``|+>^n``; each layer applies ``exp(-i gamma H_C)`` (diagonal in
     the computational basis) then ``exp(-i beta X)`` on every qubit.
@@ -463,73 +553,255 @@ def qaoa_statevector(
         raise ValueError("energies must have a power-of-two length")
     if len(gammas) != len(betas):
         raise ValueError("gammas and betas must have equal length")
-    amplitude = 1.0 / math.sqrt(size)
-    real = [amplitude] * size
-    imag = [0.0] * size
+    return _evolve(energies, _x_mixer_pairs(n), gammas, betas)
+
+
+def _evolve(
+    energies: Sequence[float],
+    mixer_layers: Sequence[Sequence[tuple[int, int]]],
+    gammas: Sequence[float],
+    betas: Sequence[float],
+) -> tuple[list[float], list[float]]:
+    amplitude = 1.0 / math.sqrt(len(energies))
+    real = [amplitude] * len(energies)
+    imag = [0.0] * len(energies)
     for gamma, beta in zip(gammas, betas):
-        for k in range(size):
-            phase = gamma * energies[k]
-            c = math.cos(phase)
-            s = math.sin(phase)
-            re = real[k]
-            im = imag[k]
-            real[k] = re * c + im * s
-            imag[k] = im * c - re * s
+        _apply_phase(real, imag, energies, gamma)
         c = math.cos(beta)
         s = math.sin(beta)
-        for qubit in range(n):
-            mask = 1 << qubit
-            for block in range(0, size, mask << 1):
-                for k0 in range(block, block + mask):
-                    k1 = k0 | mask
-                    a_re = real[k0]
-                    a_im = imag[k0]
-                    b_re = real[k1]
-                    b_im = imag[k1]
-                    real[k0] = c * a_re + s * b_im
-                    imag[k0] = c * a_im - s * b_re
-                    real[k1] = c * b_re + s * a_im
-                    imag[k1] = c * b_im - s * a_re
+        for pairs in mixer_layers:
+            _rotate_pairs(real, imag, pairs, c, s)
     return real, imag
 
 
-def _expected_energy(
-    energies: Sequence[float], gammas: Sequence[float], betas: Sequence[float]
-) -> float:
-    real, imag = qaoa_statevector(energies, gammas, betas)
-    return sum(
-        energy * (re * re + im * im) for energy, re, im in zip(energies, real, imag)
+@dataclass(frozen=True, slots=True)
+class _Ansatz:
+    """Basis states the ansatz can reach, as bit vectors, and its mixer."""
+
+    states: tuple[tuple[int, ...], ...]
+    mixer_layers: tuple[tuple[tuple[int, int], ...], ...]
+    beta_max: float
+
+
+def one_hot_groups(problem: AssignmentProblem) -> tuple[tuple[int, ...], ...]:
+    """Variable indices of each exactly-one constraint (one register each)."""
+
+    agent_count = len(problem.agent_ids)
+    task_count = len(problem.task_ids)
+    if agent_count <= task_count:
+        return tuple(
+            tuple(problem.variable(a, t) for t in range(task_count))
+            for a in range(agent_count)
+        )
+    return tuple(
+        tuple(problem.variable(a, t) for a in range(agent_count))
+        for t in range(task_count)
+    )
+
+
+def one_hot_cost_qubo(problem: AssignmentProblem) -> Qubo:
+    """Cost Hamiltonian for the constraint-preserving ansatz.
+
+    The exactly-one constraints are enforced by the circuit (W-state start,
+    XY mixer), so they carry no penalty here. The at-most-one constraints keep
+    a penalty ``P_sub = c_max + 1``, smaller than the full QUBO's
+    ``n * c_max + 1`` and still sufficient inside the one-hot subspace: take
+    any state there that violates an at-most-one constraint, and move one of
+    the colliding variables of its register to an unused partner (one exists,
+    because the exact side is the smaller side). That move adds at most
+    ``c_max`` of cost and removes at least ``P_sub`` of penalty, so energy
+    strictly drops; repeating reaches a feasible assignment. Every subspace
+    minimum is therefore a minimum-cost feasible assignment.
+    """
+
+    agent_count = len(problem.agent_ids)
+    task_count = len(problem.task_ids)
+    penalty = max(max(row) for row in problem.costs) + 1.0
+    at_most_groups = (
+        [
+            [problem.variable(a, t) for a in range(agent_count)]
+            for t in range(task_count)
+        ]
+        if agent_count <= task_count
+        else [
+            [problem.variable(a, t) for t in range(task_count)]
+            for a in range(agent_count)
+        ]
+    )
+    quadratic: dict[tuple[int, int], float] = {}
+    for group in at_most_groups:
+        for position, i in enumerate(group):
+            for j in group[position + 1 :]:
+                quadratic[(min(i, j), max(i, j))] = penalty
+    return Qubo(
+        labels=problem.qubo.labels,
+        linear=tuple(
+            problem.costs[a][t] for a in range(agent_count) for t in range(task_count)
+        ),
+        quadratic=tuple(sorted((i, j, value) for (i, j), value in quadratic.items())),
+    )
+
+
+def _xy_ansatz(problem: AssignmentProblem) -> _Ansatz:
+    """W-state start and ring-XY mixer, simulated in the one-hot subspace.
+
+    Every exactly-one register holds one excitation. A pairwise XY gate moves
+    that excitation between two qubits of one register and leaves the
+    subspace invariant, so evolving only the ``prod(len(register))`` one-hot
+    basis states is exact, not an approximation.
+    """
+
+    groups = one_hot_groups(problem)
+    sizes = [len(group) for group in groups]
+    strides = [1] * len(groups)
+    for g in range(1, len(groups)):
+        strides[g] = strides[g - 1] * sizes[g - 1]
+    dimension = strides[-1] * sizes[-1]
+    states: list[tuple[int, ...]] = []
+    for index in range(dimension):
+        bits = [0] * problem.num_variables
+        for group, size, stride in zip(groups, sizes, strides):
+            bits[group[(index // stride) % size]] = 1
+        states.append(tuple(bits))
+    layers: list[tuple[tuple[int, int], ...]] = []
+    for size, stride in zip(sizes, strides):
+        if size < 2:
+            continue
+        edges = [(m, m + 1) for m in range(size - 1)]
+        if size > 2:
+            edges.append((size - 1, 0))
+        for left, right in edges:
+            layers.append(
+                tuple(
+                    (index, index + (right - left) * stride)
+                    for index in range(dimension)
+                    if (index // stride) % size == left
+                )
+            )
+    return _Ansatz(tuple(states), tuple(layers), math.pi)
+
+
+def _assignment_ansatz(problem: AssignmentProblem) -> _Ansatz:
+    """Uniform start over feasible assignments; swap and move mixer terms.
+
+    Registers are the exactly-one side (agents when ``A <= T``), targets the
+    other side. A basis state is an injective register -> target map. Each
+    mixer term is a sum of ``|s><s'| + h.c.`` over disjoint state pairs, so
+    ``exp(-i beta H_term)`` is a set of exact two-level rotations, and every
+    term maps feasible assignments to feasible assignments:
+
+    * swap ``(i, j)``: registers ``i`` and ``j`` exchange targets;
+    * move ``(i, u, v)``: register ``i`` hops from target ``u`` to target
+      ``v`` while no other register uses ``v``.
+    """
+
+    agent_count = len(problem.agent_ids)
+    task_count = len(problem.task_ids)
+    registers = min(agent_count, task_count)
+    width = max(agent_count, task_count)
+    maps = list(permutations(range(width), registers))
+    index = {mapping: position for position, mapping in enumerate(maps)}
+    layers: list[tuple[tuple[int, int], ...]] = []
+    for i in range(registers):
+        for j in range(i + 1, registers):
+            pairs: list[tuple[int, int]] = []
+            for mapping in maps:
+                swapped = list(mapping)
+                swapped[i], swapped[j] = swapped[j], swapped[i]
+                partner = index[tuple(swapped)]
+                if index[mapping] < partner:
+                    pairs.append((index[mapping], partner))
+            layers.append(tuple(pairs))
+    for i in range(registers):
+        for u in range(width):
+            for v in range(u + 1, width):
+                pairs = []
+                for mapping in maps:
+                    if mapping[i] == u and v not in mapping:
+                        moved = list(mapping)
+                        moved[i] = v
+                        pairs.append((index[mapping], index[tuple(moved)]))
+                if pairs:
+                    layers.append(tuple(pairs))
+
+    def bits(mapping: tuple[int, ...]) -> tuple[int, ...]:
+        vector = [0] * problem.num_variables
+        for register, target in enumerate(mapping):
+            if agent_count <= task_count:
+                vector[problem.variable(register, target)] = 1
+            else:
+                vector[problem.variable(target, register)] = 1
+        return tuple(vector)
+
+    return _Ansatz(tuple(bits(mapping) for mapping in maps), tuple(layers), math.pi)
+
+
+def _x_ansatz(problem: AssignmentProblem) -> _Ansatz:
+    n = problem.num_variables
+    return _Ansatz(
+        tuple(_bits_of(index, n) for index in range(1 << n)),
+        tuple(tuple(layer) for layer in _x_mixer_pairs(n)),
+        math.pi / 2,
     )
 
 
 def solve_qaoa(
     problem: AssignmentProblem,
     settings: QaoaSettings | None = None,
+    *,
+    seed: int | None = None,
 ) -> AssignmentSolution:
-    """Simulate depth-``p`` QAOA and decode the best feasible likely bitstring."""
+    """Simulate depth-``p`` QAOA, then decode as configured.
+
+    ``seed`` drives shot sampling only; by default it is derived from the
+    problem's coefficients, so the same problem always decodes the same way.
+    """
 
     settings = settings or QaoaSettings()
     n = problem.num_variables
-    if n > MAX_QAOA_QUBITS:
-        raise ValueError(f"QAOA simulation is limited to {MAX_QAOA_QUBITS} qubits")
-    raw = _diagonal_energies(problem.qubo)
+    if settings.mixer == "x" and n > MAX_QAOA_QUBITS:
+        raise ValueError(f"textbook QAOA is limited to {MAX_QAOA_QUBITS} qubits")
+    dimension = (
+        feasible_assignment_count(problem)
+        if settings.mixer == "assignment"
+        else math.prod(len(group) for group in one_hot_groups(problem))
+    )
+    if settings.mixer != "x" and dimension > MAX_QAOA_SUBSPACE:
+        raise ValueError(
+            f"constrained QAOA is limited to {MAX_QAOA_SUBSPACE} basis states"
+        )
+    if settings.mixer == "assignment":
+        ansatz = _assignment_ansatz(problem)
+    elif settings.mixer == "xy":
+        ansatz = _xy_ansatz(problem)
+    else:
+        ansatz = _x_ansatz(problem)
+    # The constrained ansatzes use the smaller, provably sufficient subspace
+    # penalty (never triggered by "assignment", whose states are all
+    # feasible); the textbook ansatz leaves the subspace and needs the full
+    # QUBO.
+    cost = problem.qubo if settings.mixer == "x" else one_hot_cost_qubo(problem)
+    raw = [cost.energy(bits) for bits in ansatz.states]
     low = min(raw)
     span = max(raw) - low
-    # Normalising the diagonal to [0, 1] makes one angle grid fit every
-    # instance; it rescales H_C and changes no ordering.
+    # Normalising the reachable diagonal to [0, 1] makes one angle grid fit
+    # every instance; it rescales H_C and changes no ordering.
     energies = [(value - low) / span if span > 0 else 0.0 for value in raw]
     evaluations = 0
 
     def evaluate(gammas: Sequence[float], betas: Sequence[float]) -> float:
         nonlocal evaluations
         evaluations += 1
-        return _expected_energy(energies, gammas, betas)
+        real, imag = _evolve(energies, ansatz.mixer_layers, gammas, betas)
+        return sum(
+            energy * (re * re + im * im) for energy, re, im in zip(energies, real, imag)
+        )
 
     gammas: list[float] = []
     betas: list[float] = []
     points = settings.grid_points
     gamma_grid = [settings.gamma_max * (k + 1) / points for k in range(points)]
-    beta_grid = [(math.pi / 2) * (k + 1) / (points + 1) for k in range(points)]
+    beta_grid = [ansatz.beta_max * (k + 1) / (points + 1) for k in range(points)]
     for _ in range(settings.depth):
         best: tuple[float, float, float] | None = None
         for gamma in gamma_grid:
@@ -542,7 +814,7 @@ def solve_qaoa(
         betas.append(best[2])
         current = best[0]
         gamma_step = settings.gamma_max / points / 2
-        beta_step = (math.pi / 2) / (points + 1) / 2
+        beta_step = ansatz.beta_max / (points + 1) / 2
         for _ in range(settings.refinement_rounds):
             for layer in range(len(gammas)):
                 for angles, step in ((gammas, gamma_step), (betas, beta_step)):
@@ -561,35 +833,56 @@ def solve_qaoa(
             gamma_step /= 2
             beta_step /= 2
 
-    real, imag = qaoa_statevector(energies, gammas, betas)
+    real, imag = _evolve(energies, ansatz.mixer_layers, gammas, betas)
     probabilities = [re * re + im * im for re, im in zip(real, imag)]
-    feasible_mass = 0.0
-    for index, probability in enumerate(probabilities):
-        if problem.decode(_bits_of(index, n)) is not None:
-            feasible_mass += probability
-    ranked = sorted(range(len(probabilities)), key=lambda k: (-probabilities[k], k))
-    best_bits: tuple[int, ...] | None = None
+    decoded = [problem.decode(bits) for bits in ansatz.states]
+    feasible_mass = sum(
+        probability
+        for probability, pairs in zip(probabilities, decoded)
+        if pairs is not None
+    )
+    # Simulator-only diagnostic: the probability one shot returns a QUBO
+    # minimum. It is reported, never used to decide anything.
+    ground_mass = sum(
+        probability
+        for probability, value in zip(probabilities, raw)
+        if value <= low + 1e-9 * max(1.0, abs(low))
+    )
+    if settings.decode == "top_k":
+        candidates = sorted(
+            range(len(probabilities)), key=lambda k: (-probabilities[k], k)
+        )[: settings.decode_candidates]
+    else:
+        rng = random.Random(derive_seed(problem, salt=1) if seed is None else seed)
+        cumulative: list[float] = []
+        total = 0.0
+        for probability in probabilities:
+            total += probability
+            cumulative.append(total)
+        candidates = sorted(
+            {
+                min(bisect_right(cumulative, rng.random() * total), len(cumulative) - 1)
+                for _ in range(settings.shots)
+            }
+        )
+    best_index: int | None = None
     best_key: tuple[float, float, int] | None = None
-    for index in ranked[: settings.decode_candidates]:
-        bits = _bits_of(index, n)
-        pairs = problem.decode(bits)
+    for index in candidates:
+        pairs = decoded[index]
         if pairs is None:
             continue
         key = (problem.assignment_cost(pairs), -probabilities[index], index)
         if best_key is None or key < best_key:
             best_key = key
-            best_bits = bits
-    chosen_probability = None
-    if best_bits is not None:
-        chosen_index = sum(bit << i for i, bit in enumerate(best_bits))
-        chosen_probability = probabilities[chosen_index]
+            best_index = index
     return _solution(
         problem,
         "qaoa",
-        best_bits,
+        None if best_index is None else ansatz.states[best_index],
         evaluations,
-        probability=chosen_probability,
+        probability=None if best_index is None else probabilities[best_index],
         feasible_probability=feasible_mass,
+        ground_probability=ground_mass,
     )
 
 
@@ -728,7 +1021,7 @@ def solve(
     if solver == "brute_force":
         return solve_brute_force(problem)
     if solver == "qaoa":
-        return solve_qaoa(problem, qaoa)
+        return solve_qaoa(problem, qaoa, seed=seed)
     if solver == "sqa":
         return solve_sqa(problem, sqa, seed=seed)
     raise ValueError(f"unknown solver {solver!r}; expected one of {SOLVER_NAMES}")
@@ -770,18 +1063,23 @@ def qubo_to_ising(qubo: Qubo) -> dict[str, object]:
 __all__ = [
     "MAX_BRUTE_FORCE_ASSIGNMENTS",
     "MAX_QAOA_QUBITS",
+    "MAX_QAOA_SUBSPACE",
     "MAX_QUBO_ENUMERATION_QUBITS",
     "MAX_SQA_QUBITS",
     "SOLVER_NAMES",
     "AssignmentProblem",
     "AssignmentSolution",
     "IsingModel",
+    "QAOA_DECODERS",
+    "QAOA_MIXERS",
     "QaoaSettings",
     "Qubo",
     "SqaSettings",
     "assignment_qubo",
     "derive_seed",
     "feasible_assignment_count",
+    "one_hot_cost_qubo",
+    "one_hot_groups",
     "qaoa_statevector",
     "qubo_brute_force_minimum",
     "qubo_to_bqm",

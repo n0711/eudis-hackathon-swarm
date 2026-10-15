@@ -160,8 +160,33 @@ def test_config_validates_quantum_fields() -> None:
     with pytest.raises(ValueError):
         SimulationConfig(qaoa_depth=True)  # type: ignore[arg-type]
     with pytest.raises(ValueError):
+        SimulationConfig(qaoa_depth=9)
+    with pytest.raises(ValueError):
+        SimulationConfig(qaoa_mixer="grover")
+    # Textbook QAOA simulates every bitstring: at most 16 qubits.
+    with pytest.raises(ValueError):
         SimulationConfig(
-            allocation_policy="quantum", quantum_max_agents=4, quantum_max_objectives=5
+            allocation_policy="quantum",
+            qaoa_mixer="x",
+            quantum_max_agents=4,
+            quantum_max_objectives=5,
+        )
+    # The constrained ansatzes simulate only reachable states, so 4 x 5 (20
+    # qubits, 120 assignments) is fine, but not 5 x 9 (15120 assignments) or
+    # an XY register space of 9**4.
+    SimulationConfig(
+        allocation_policy="quantum", quantum_max_agents=4, quantum_max_objectives=5
+    )
+    with pytest.raises(ValueError):
+        SimulationConfig(
+            allocation_policy="quantum", quantum_max_agents=5, quantum_max_objectives=9
+        )
+    with pytest.raises(ValueError):
+        SimulationConfig(
+            allocation_policy="quantum",
+            qaoa_mixer="xy",
+            quantum_max_agents=4,
+            quantum_max_objectives=9,
         )
     # SQA accepts more than the statevector limit, up to its own bound.
     SimulationConfig(
@@ -203,9 +228,9 @@ def test_default_scenario_with_the_quantum_policy_is_pinned(solver: str) -> None
     metrics = result.metrics
     assert metrics.mission_completed
     assert metrics.completed_task_count == 20
-    assert metrics.simulation_duration == 16.75
+    assert metrics.simulation_duration == 16.25
     assert len(result.quantum_solves) == 20
-    assert sum(record.proposal.changed_choice for record in result.quantum_solves) == 2
+    assert sum(record.proposal.changed_choice for record in result.quantum_solves) == 4
     assert all(record.proposal.solution.feasible for record in result.quantum_solves)
     assert {record.allocation.policy for record in metrics.allocation_decisions} == {
         "quantum"
@@ -324,6 +349,8 @@ def test_cli_accepts_the_quantum_policy() -> None:
                 "2",
                 "--qaoa-depth",
                 "1",
+                "--qaoa-mixer",
+                "xy",
                 "--tasks",
                 "6",
                 "--log-level",

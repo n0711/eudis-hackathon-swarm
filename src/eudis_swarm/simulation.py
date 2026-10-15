@@ -364,7 +364,7 @@ class Simulation:
                 solver=config.quantum_solver,
                 max_agents=config.quantum_max_agents,
                 max_objectives=config.quantum_max_objectives,
-                qaoa=QaoaSettings(depth=config.qaoa_depth),
+                qaoa=QaoaSettings(mixer=config.qaoa_mixer, depth=config.qaoa_depth),
             )
             if config.allocation_policy == "quantum"
             else None
@@ -1732,13 +1732,20 @@ def _parser() -> argparse.ArgumentParser:
         type=int,
         default=3,
         help="with --allocation-policy quantum: most objectives per "
-        "formulation (default: 3)",
+        "formulation (default: 4)",
     )
     parser.add_argument(
         "--qaoa-depth",
         type=int,
-        default=2,
-        help="QAOA layers p for --quantum-solver qaoa (default: 2)",
+        default=4,
+        help="QAOA layers p for --quantum-solver qaoa (default: 4)",
+    )
+    parser.add_argument(
+        "--qaoa-mixer",
+        choices=("assignment", "xy", "x"),
+        default="assignment",
+        help="QAOA ansatz: 'assignment' stays inside feasible assignments "
+        "(default), 'xy' keeps one-hot registers, 'x' is textbook QAOA",
     )
     parser.add_argument(
         "--communication-range",
@@ -1869,6 +1876,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             quantum_max_agents=arguments.quantum_max_agents,
             quantum_max_objectives=arguments.quantum_max_objectives,
             qaoa_depth=arguments.qaoa_depth,
+            qaoa_mixer=arguments.qaoa_mixer,
             task_control=arguments.task_control,
             communication_range=arguments.communication_range,
             link_model=arguments.link_model,

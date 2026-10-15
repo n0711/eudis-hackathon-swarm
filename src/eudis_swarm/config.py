@@ -24,10 +24,12 @@ The fields fall into five groups:
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 
 from .communication import RadioModel, RegionJammer
 from .mission_contract import MissionContract
+from .quantum_opt import MAX_QAOA_QUBITS, MAX_QAOA_SUBSPACE, QAOA_MIXERS
 from .validation import (
     validate_nonnegative_real,
     validate_positive_integer,
@@ -82,12 +84,15 @@ class SimulationConfig:
     #: (simulated quantum annealing).
     quantum_solver: str = "qaoa"
     #: With allocation_policy="quantum": most UAVs in one formulation (self
-    #: plus the nearest idle HEARD peers) and most objectives (the nearest
-    #: claimable ones). The defaults give at most 9 qubits.
+    #: plus the nearest HEARD peers) and most objectives (chosen round-robin
+    #: from the claimable ones). The defaults give at most 12 qubits.
     quantum_max_agents: int = 3
-    quantum_max_objectives: int = 3
+    quantum_max_objectives: int = 4
+    #: QAOA ansatz for quantum_solver="qaoa": "assignment" (never leaves the
+    #: feasible assignments), "xy" (one-hot registers) or "x" (textbook).
+    qaoa_mixer: str = "assignment"
     #: QAOA depth p for quantum_solver="qaoa".
-    qaoa_depth: int = 2
+    qaoa_depth: int = 4
     #: "distributed" replicated claim ownership (the operational model), or
     #: "centralized" -- the single-coordinator comparison baseline.
     task_control: str = "distributed"
@@ -160,17 +165,31 @@ class SimulationConfig:
         )
         if not isinstance(self.qaoa_depth, int) or isinstance(self.qaoa_depth, bool):
             raise ValueError("qaoa_depth must be an integer")
-        if not 1 <= self.qaoa_depth <= 4:
-            raise ValueError("qaoa_depth must be between 1 and 4")
+        if not 1 <= self.qaoa_depth <= 8:
+            raise ValueError("qaoa_depth must be between 1 and 8")
+        if self.qaoa_mixer not in QAOA_MIXERS:
+            raise ValueError(f"qaoa_mixer must be one of {QAOA_MIXERS}")
         if self.allocation_policy == "quantum":
-            # Bounds: the statevector simulator's qubit limit, and a solve
-            # budget that keeps a run interactive.
-            qubits = self.quantum_max_agents * self.quantum_max_objectives
-            if self.quantum_solver == "qaoa" and qubits > 16:
-                raise ValueError(
-                    "quantum_max_agents * quantum_max_objectives must be <= 16 "
-                    "for the QAOA simulator"
-                )
+            # Bounds: what each simulator can represent, and a solve budget
+            # that keeps a run interactive.
+            agents = self.quantum_max_agents
+            objectives = self.quantum_max_objectives
+            qubits = agents * objectives
+            if self.quantum_solver == "qaoa":
+                if self.qaoa_mixer == "x":
+                    states = 2**qubits
+                elif self.qaoa_mixer == "xy":
+                    states = max(objectives**agents, agents**objectives)
+                else:
+                    states = math.perm(max(agents, objectives), min(agents, objectives))
+                limit = MAX_QAOA_QUBITS if self.qaoa_mixer == "x" else None
+                if (limit is not None and qubits > limit) or (
+                    limit is None and states > MAX_QAOA_SUBSPACE
+                ):
+                    raise ValueError(
+                        "quantum_max_agents x quantum_max_objectives is too large "
+                        f"for the {self.qaoa_mixer!r} QAOA simulator"
+                    )
             if qubits > 256:
                 raise ValueError(
                     "quantum_max_agents * quantum_max_objectives must be <= 256"

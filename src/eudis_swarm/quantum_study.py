@@ -5,14 +5,18 @@ generalization study (connected, sparse, and sparse with a region jammer that
 partitions the swarm for 3 s <= t < 8 s). Only ``allocation_policy`` and the
 quantum solver differ between paired rows.
 
-Three outputs:
+Outputs:
 
 * run rows (:data:`RUN_COLUMNS`): mission and coordination metrics per run;
 * solve rows (:data:`SOLVE_COLUMNS`): one per receiver-local quantum solve,
   with its optimality gap against exact brute force on the same problem;
+* ansatz rows (:data:`ANSATZ_COLUMNS`): every ``stride``-th problem recorded
+  by the QAOA runs, re-solved with each QAOA ansatz at the same depth, with
+  the single-shot probability of an optimal answer next to the probability
+  of drawing one uniformly at random from the feasible assignments;
 * optional timing rows (:data:`TIMING_COLUMNS`): wall-clock time to re-solve
-  each recorded problem with each solver. Timing is measured here, outside
-  the simulator, and is the only non-deterministic output; nothing pins it.
+  recorded problems with each solver. Timing is measured here, outside the
+  simulator, and is the only non-deterministic output; nothing pins it.
 
 All other numbers are deterministic for the same command line.
 """
@@ -25,14 +29,22 @@ import io
 import math
 import sys
 import time
-from collections.abc import Iterable, Iterator, Sequence
+from collections.abc import Callable, Iterable, Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TextIO
 
 from .communication import RegionJammer
 from .config import SimulationConfig
-from .quantum_opt import solve, solve_brute_force
+from .quantum_opt import (
+    QAOA_MIXERS,
+    AssignmentProblem,
+    QaoaSettings,
+    feasible_assignment_count,
+    solve,
+    solve_brute_force,
+    solve_qaoa,
+)
 from .simulation import Simulation, SimulationResult
 
 #: (label, allocation_policy, quantum_solver)
@@ -81,8 +93,34 @@ SOLVE_COLUMNS: tuple[str, ...] = (
     "evaluations",
     "returned_probability",
     "feasible_probability",
+    "ground_probability",
+    "feasible_assignments",
     "utility_task_id",
     "proposed_task_id",
+)
+ANSATZ_COLUMNS: tuple[str, ...] = (
+    "agents",
+    "topology",
+    "seed",
+    "agent_id",
+    "timestamp",
+    "qubits",
+    "feasible_assignments",
+    "ansatz",
+    "depth",
+    "ground_probability",
+    "feasible_probability",
+    "random_feasible_probability",
+    "optimal_with_shots",
+)
+ANSATZ_SUMMARY_COLUMNS: tuple[str, ...] = (
+    "qubits",
+    "ansatz",
+    "problems",
+    "optimal_with_shots",
+    "mean_ground_probability",
+    "mean_feasible_probability",
+    "mean_random_feasible_probability",
 )
 TIMING_COLUMNS: tuple[str, ...] = (
     "qubits",
@@ -212,6 +250,8 @@ def run_case(case: StudyCase) -> CaseOutcome:
                 "evaluations": str(solution.evaluations),
                 "returned_probability": _fmt(solution.probability),
                 "feasible_probability": _fmt(solution.feasible_probability),
+                "ground_probability": _fmt(solution.ground_probability),
+                "feasible_assignments": str(feasible_assignment_count(problem)),
                 "utility_task_id": str(proposal.utility_task_id),
                 "proposed_task_id": str(proposal.proposed_task_id),
             }
@@ -237,21 +277,122 @@ def run_case(case: StudyCase) -> CaseOutcome:
     return CaseOutcome(case, run_row, tuple(solve_rows), result)
 
 
+def _recorded_problems(
+    outcomes: Iterable[CaseOutcome], policy: str | None = None
+) -> list[tuple[CaseOutcome, int, float, AssignmentProblem]]:
+    return [
+        (outcome, record.agent_id, record.timestamp, record.proposal.problem)
+        for outcome in outcomes
+        if policy is None or outcome.case.policy == policy
+        for record in outcome.result.quantum_solves
+    ]
+
+
+def compare_ansatzes(
+    outcomes: Iterable[CaseOutcome],
+    *,
+    stride: int = 10,
+    depth: int = 4,
+    mixers: Sequence[str] = QAOA_MIXERS,
+) -> list[dict[str, str]]:
+    """Re-solve every ``stride``-th QAOA-run problem with each ansatz."""
+
+    rows: list[dict[str, str]] = []
+    sample = _recorded_problems(outcomes, "quantum_qaoa")[::stride]
+    for outcome, agent_id, timestamp, problem in sample:
+        optimal = solve_brute_force(problem).cost
+        feasible = feasible_assignment_count(problem)
+        for mixer in mixers:
+            solution = solve_qaoa(problem, QaoaSettings(mixer=mixer, depth=depth))
+            rows.append(
+                {
+                    "agents": str(outcome.case.agents),
+                    "topology": outcome.case.topology,
+                    "seed": str(outcome.case.seed),
+                    "agent_id": str(agent_id),
+                    "timestamp": f"{timestamp:.6f}",
+                    "qubits": str(problem.num_variables),
+                    "feasible_assignments": str(feasible),
+                    "ansatz": mixer,
+                    "depth": str(depth),
+                    "ground_probability": _fmt(solution.ground_probability),
+                    "feasible_probability": _fmt(solution.feasible_probability),
+                    "random_feasible_probability": f"{1.0 / feasible:.6f}",
+                    "optimal_with_shots": "1"
+                    if solution.cost is not None
+                    and optimal is not None
+                    and solution.cost <= optimal + 1e-9
+                    else "0",
+                }
+            )
+    return rows
+
+
+def summarize_ansatzes(rows: Sequence[dict[str, str]]) -> list[dict[str, str]]:
+    """Per (qubits, ansatz): optimal-with-shots count and mean probabilities."""
+
+    groups: dict[tuple[int, str], list[dict[str, str]]] = {}
+    for row in rows:
+        groups.setdefault((int(row["qubits"]), row["ansatz"]), []).append(row)
+    order = {mixer: position for position, mixer in enumerate(QAOA_MIXERS)}
+    summary: list[dict[str, str]] = []
+    for (qubits, ansatz), members in sorted(
+        groups.items(), key=lambda item: (item[0][0], order[item[0][1]])
+    ):
+
+        def mean(column: str, members: list[dict[str, str]] = members) -> str:
+            return f"{sum(float(row[column]) for row in members) / len(members):.3f}"
+
+        summary.append(
+            {
+                "qubits": str(qubits),
+                "ansatz": ansatz,
+                "problems": str(len(members)),
+                "optimal_with_shots": str(
+                    sum(int(row["optimal_with_shots"]) for row in members)
+                ),
+                "mean_ground_probability": mean("ground_probability"),
+                "mean_feasible_probability": mean("feasible_probability"),
+                "mean_random_feasible_probability": mean("random_feasible_probability"),
+            }
+        )
+    return summary
+
+
 def time_solvers(
     outcomes: Iterable[CaseOutcome],
     solvers: Sequence[str] = ("brute_force", "qaoa", "sqa"),
+    *,
+    ansatz_stride: int | None = None,
+    depth: int = 4,
 ) -> list[dict[str, str]]:
-    """Wall-clock re-solve of every recorded problem; non-deterministic."""
+    """Wall-clock re-solve of recorded problems; non-deterministic.
 
+    Every recorded problem is timed with each of ``solvers``. With
+    ``ansatz_stride``, the ansatz-comparison sample is also timed with the
+    XY and textbook QAOA ansatzes, labelled ``qaoa_xy`` and ``qaoa_x``.
+    """
+
+    outcomes = list(outcomes)
     samples: dict[tuple[int, str], list[float]] = {}
-    for outcome in outcomes:
-        for record in outcome.result.quantum_solves:
-            problem = record.proposal.problem
-            for solver in solvers:
-                started = time.perf_counter()
-                solve(problem, solver)
-                elapsed = time.perf_counter() - started
-                samples.setdefault((problem.num_variables, solver), []).append(elapsed)
+
+    def record(
+        problem: AssignmentProblem, label: str, run: Callable[[], object]
+    ) -> None:
+        started = time.perf_counter()
+        run()
+        elapsed = time.perf_counter() - started
+        samples.setdefault((problem.num_variables, label), []).append(elapsed)
+
+    for _, _, _, problem in _recorded_problems(outcomes):
+        for solver in solvers:
+            record(problem, solver, lambda: solve(problem, solver))
+    if ansatz_stride is not None:
+        sample = _recorded_problems(outcomes, "quantum_qaoa")[::ansatz_stride]
+        for _, _, _, problem in sample:
+            for mixer in ("xy", "x"):
+                settings = QaoaSettings(mixer=mixer, depth=depth)
+                record(problem, f"qaoa_{mixer}", lambda: solve_qaoa(problem, settings))
     return [
         {
             "qubits": str(qubits),
@@ -363,6 +504,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--solves-output", type=Path, default=None)
     parser.add_argument("--summary-output", type=Path, default=None)
     parser.add_argument(
+        "--ansatz-output",
+        type=Path,
+        default=None,
+        help="re-solve every --ansatz-stride-th QAOA-run problem with each "
+        "QAOA ansatz and write per-problem rows here",
+    )
+    parser.add_argument("--ansatz-summary-output", type=Path, default=None)
+    parser.add_argument("--ansatz-stride", type=int, default=10)
+    parser.add_argument("--ansatz-depth", type=int, default=4)
+    parser.add_argument(
         "--timing-output",
         type=Path,
         default=None,
@@ -370,8 +521,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         "wall-clock timings (non-deterministic) here",
     )
     args = parser.parse_args(argv)
-    if args.seeds < 1 or args.seed_base < 0:
-        parser.error("--seeds must be positive and --seed-base non-negative")
+    if (
+        args.seeds < 1
+        or args.seed_base < 0
+        or args.ansatz_stride < 1
+        or args.ansatz_depth < 1
+    ):
+        parser.error(
+            "--seeds, --ansatz-stride and --ansatz-depth must be positive and "
+            "--seed-base non-negative"
+        )
     seeds = tuple(range(args.seed_base, args.seed_base + args.seeds))
     outcomes = [
         run_case(case)
@@ -388,8 +547,26 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.summary_output is not None:
         summary = summarize(run_rows)
         _emit(summary, tuple(summary[0]), args.summary_output)
+    if args.ansatz_output is not None or args.ansatz_summary_output is not None:
+        ansatz_rows = compare_ansatzes(
+            outcomes, stride=args.ansatz_stride, depth=args.ansatz_depth
+        )
+        if args.ansatz_output is not None:
+            _emit(ansatz_rows, ANSATZ_COLUMNS, args.ansatz_output)
+        if args.ansatz_summary_output is not None:
+            _emit(
+                summarize_ansatzes(ansatz_rows),
+                ANSATZ_SUMMARY_COLUMNS,
+                args.ansatz_summary_output,
+            )
     if args.timing_output is not None:
-        _emit(time_solvers(outcomes), TIMING_COLUMNS, args.timing_output)
+        _emit(
+            time_solvers(
+                outcomes, ansatz_stride=args.ansatz_stride, depth=args.ansatz_depth
+            ),
+            TIMING_COLUMNS,
+            args.timing_output,
+        )
     return 0
 
 
