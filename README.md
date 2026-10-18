@@ -1,6 +1,6 @@
 # eudis-swarm
 
-> **New here?** Start with **[`docs/onboarding.md`](docs/onboarding.md)** — setup,
+> **New here?** Start with **[`docs/onboarding.md`](docs/onboarding.md)**: setup,
 > what to read in what order, and the three rules that must not be broken. About
 > an hour from nothing to changing code with confidence.
 
@@ -9,7 +9,7 @@ communications-aware autonomous UAV swarm.** It models what happens when radio
 contact splits a swarm into disconnected groups: each UAV keeps working from its
 own local knowledge, and conflicting task ownership is reconciled autonomously
 once connectivity returns. The normal mission now turns receiver-local utility
-into claims; only a locally owned claim authorizes motion, renewal, or completion.
+into claims, and only a locally owned claim authorizes motion, renewal, or completion.
 The centralized allocators remain comparison baselines, not the operational
 controller. Each UAV now also exposes a composed, receiver-local EFSM kernel for
 contact inference, peer availability, task-ownership conformance, and epistemic
@@ -23,7 +23,7 @@ The operating environment this is aimed at is not hypothetical: EASA currently
 lists `LCCC NICOSIA` among the Flight Information Regions affected by GNSS
 jamming and spoofing, and a peer-reviewed flight experiment in that FIR recorded
 a receiver losing positioning for 80% of the time aloft. See
-[`docs/threat_context.md`](docs/threat_context.md) — including what those
+[`docs/threat_context.md`](docs/threat_context.md), including what those
 sources deliberately do *not* establish about this simulator.
 
 ## The result in two commands
@@ -31,7 +31,7 @@ sources deliberately do *not* establish about this simulator.
 Declaring a UAV failed requires a quorum, and the threshold guarantees that one
 observer can never declare a peer dead. With two aircraft the survivor **is**
 the only observer, so the loss can never be declared at all. Both control modes
-are then equally blind — what differs is whether recovery needed the
+are then equally blind. What differs is whether recovery needed the
 declaration.
 
 ```bash
@@ -40,7 +40,7 @@ eudis-swarm --scenario baseline-quorum-floor  # central coordinator
 ```
 
 On Windows, `scripts/pitch-demo.ps1` runs both back to back and needs no
-activated environment; it calls the interpreter in `.venv` directly.
+activated environment, because it calls the interpreter in `.venv` directly.
 
 | | declared | never detected | tasks | mission |
 | --- | ---: | ---: | ---: | --- |
@@ -60,7 +60,7 @@ control model.
 This is not a property of one contrived pair. Across 440 runs with four
 aircraft and a jammer, central control failed 68 missions and distributed
 failed none, while the two modes detected losses *identically* at every
-communication range — the same awareness, opposite outcomes. Full tables and
+communication range: the same awareness, opposite outcomes. Full tables and
 limits: [`docs/measured_results.md`](docs/measured_results.md).
 
 [![CI](https://github.com/n0711/eudis-hackathon-swarm/actions/workflows/ci.yml/badge.svg)](https://github.com/n0711/eudis-hackathon-swarm/actions/workflows/ci.yml)
@@ -76,25 +76,25 @@ receiver-local task ownership under communication loss. It includes a point-mass
 and a separate one-vehicle ArduPilot SITL experiment. It does **not** yet include
 live perception observations, exploration mapping, relay positioning, flight
 safety supervision, or SITL-controlled swarm missions. For a short demonstration
-use the [runbook](docs/demo_runbook.md); for planned perception input see the
+use the [runbook](docs/demo_runbook.md). For planned perception input see the
 [observation replay boundary](docs/observation_integration.md). A standalone
-two-source JSONL replay now validates and ages receiver-local observations; it
+two-source JSONL replay now validates and ages receiver-local observations, but it
 does not yet deliver them through `Simulation` or create mission tasks.
 
 ## EUDIS Challenge
 
-Independent project for the **EUDIS Defence Hackathon 2026 – Autumn Edition**,
-**Challenge 2 – Swarm Coordination and Autonomous Operations**.
+Independent project for the **EUDIS Defence Hackathon 2026, Autumn Edition**,
+**Challenge 2: Swarm Coordination and Autonomous Operations**.
 
 The challenge calls for:
 
-- **multi-agent coordination** — many platforms cooperating on one mission;
-- **resilient communications** — useful behaviour while links are degraded,
-  jammed, or fully partitioned;
-- **distributed task allocation** — deciding who does what without a single
-  authoritative planner;
-- **minimal human control** — the swarm sustains a mission on its own;
-- **vehicle-agnostic direction** — coordination logic that does not depend on a
+- **multi-agent coordination**: many platforms cooperating on one mission
+- **resilient communications**: useful behaviour while links are degraded,
+  jammed, or fully partitioned
+- **distributed task allocation**: deciding who does what without a single
+  authoritative planner
+- **minimal human control**: the swarm sustains a mission on its own
+- **vehicle-agnostic direction**: coordination logic that does not depend on a
   particular airframe or autopilot.
 
 This repository is one team's prototype. It is not affiliated with, sponsored
@@ -107,8 +107,8 @@ organisation.
 communication loss != UAV failure
 ```
 
-A UAV that has gone quiet may be jammed, behind terrain, or briefly out of range
-— and still flying, still moving, still finishing tasks. Treating silence as
+A UAV that has gone quiet may be jammed, behind terrain, or briefly out of range,
+and still flying, still moving, still finishing tasks. Treating silence as
 death discards that work and reassigns it needlessly.
 
 So the system permits **temporary disagreement**. During a partition, two groups
@@ -160,7 +160,7 @@ current task-control milestone now makes receiver-local claims the execution
 authority without weakening either boundary.
 
 All inter-agent information passes through the modelled communication graph. The
-world/network layer decides whether each physical hop is available; it never
+world/network layer decides whether each physical hop is available, and it never
 copies that topology fact into a peer store. Heartbeats intentionally remain
 one-hop observations. Immutable task claims, releases, completions, failure
 votes, and declarations use deterministic store-and-forward flooding, so an
@@ -168,7 +168,7 @@ intermediate UAV can carry evidence without becoming its logical origin.
 
 Each forwardable message has a structural identity. Every receiver suppresses
 duplicates and processes messages, nodes, and neighbours in stable order. A
-receiver applies each logical message only once; unsuccessful directed routes
+receiver applies each logical message only once. Unsuccessful directed routes
 remain pending and are retried after later topology changes until delivery or
 suppression by another successful route. Finite swarm membership and finite
 per-message/per-node seen state make the flood loop-safe without a TTL. Logical
@@ -183,10 +183,10 @@ network connectivity != direct connectivity
 ```
 
 Stable connectivity for long enough to run dissemination is the convergence
-condition; a direct all-to-all graph is not required. A partition still prevents
+condition. A direct all-to-all graph is not required. A partition still prevents
 evidence crossing its cut. The default graph is deterministic and range-based.
 The repository also contains an optional free-space line-of-sight radio model
-and seeded stochastic link sampling; this is a small analytical link model, not
+and seeded stochastic link sampling. This is a small analytical link model, not
 realistic RF propagation. Latency, bandwidth, interference, terrain, and a full
 MANET routing protocol remain outside scope.
 
@@ -209,7 +209,7 @@ the centralized runs in that sweep had no measured overlapping self-claims
 and stranded work they could not reach, while replicated ownership had no
 dropped ownership and occasionally overlapped claims during a partition. A
 separate [fleet/network comparison](docs/generalization_study.md) found brief
-central claim overlap involving a stopped UAV; claim overlap is not necessarily
+central claim overlap involving a stopped UAV, although claim overlap is not necessarily
 duplicate flight. Failure detection has a connectivity floor below which a
 genuinely dead aircraft is never declared, and no mission-level number reveals
 the loss.
@@ -221,14 +221,14 @@ with the two modes detecting losses identically at every range.
 Figures are deliberately not repeated here: one source of truth, so a stale copy
 cannot contradict the measured one.
 
-For how the system got here — what was built, in what order, and why — see
+For how the system got here (what was built, in what order, and why), see
 [`docs/milestones.md`](docs/milestones.md).
 
 ## Task Ownership EFSM
 
 `TaskClaimStore` remains the operational evidence ledger and `owns_task()`
 remains authorization. The formal task machine is a conformance projection of
-that receiver-local ledger view; it does not duplicate claim validation,
+that receiver-local ledger view. It does not duplicate claim validation,
 expiry, or reconciliation. `TaskOwnershipState` has exactly six states:
 
 | State | Meaning at this receiver |
@@ -270,7 +270,7 @@ evidence does not reset that age. A heartbeat is different: each successful
 one-hop receipt is new first-hand contact and refreshes local liveness. The
 simulator currently supplies one deterministic logical clock to every component,
 so observer-only traces may compare send and receipt timestamps to report
-latency. Decision logic does not rely on that cross-agent comparison; a physical
+latency. Decision logic does not rely on that cross-agent comparison, since a physical
 implementation may have clock skew.
 
 An executing owner renews when its locally accepted claim reaches the freshness
@@ -287,7 +287,7 @@ python -m eudis_swarm.simulation
 ```
 
 It completes all **20 / 20 tasks in 17.25 s**. UAV 2 physically fails while
-holding Task 19; the task becomes available to a receiver only after its local
+holding Task 19. The task becomes available to a receiver only after its local
 copy of the failed owner's claim expires, and UAV 1 activates the replacement at
 `t = 10.75 s`. One-hop peer-state traffic records `174 / 132 / 42`
 attempted/delivered/undelivered deliveries.
@@ -306,7 +306,7 @@ The protocol-gossip summary is:
 | Inactive-endpoint deferrals | 53 | newly observed `(message, receiver)` obligations held without counting a link attempt |
 
 The default graph remains a full clique, which explains zero unavailable-link
-attempts and zero forwarded first deliveries; chain tests exercise actual relay
+attempts and zero forwarded first deliveries. Chain tests exercise actual relay
 hops. These are logical simulator/evidence counters, not RF packet, byte,
 bandwidth, queue, or airtime measurements. Inactive software is excluded from
 the attempt denominator, while its pending evidence obligations remain available
@@ -321,21 +321,21 @@ fully deterministic 2+2 scenario. Agents `(1, 2, 3, 4)`, tasks
 1. **Connected.** All four agents share an active graph. UAV 1 creates and
    publishes a claim on **Task 19** at `t = 0`.
 2. **Partition `{1,2}` / `{3,4}`.** The four cross-component links
-   `(1,3) (1,4) (2,3) (2,4)` are blocked; delivery still works inside each half.
+   `(1,3) (1,4) (2,3) (2,4)` are blocked, while delivery still works inside each half.
 3. **The isolated half ages its evidence.** With no renewals reaching `{3,4}`,
    their copy of the Task 19 claim goes `CLAIMED_BY_PEER_FRESH` →
    `CLAIMED_BY_PEER_STALE` (by `t ≈ 1.2`) → `UNCLAIMED` once the lease expires
    (by `t ≈ 3.2`). UAV 1 keeps renewing and still owns Task 19 on the left.
 4. **A legitimate competing claim.** With its local evidence now `EXPIRED`,
    UAV 4 creates its own Task 19 claim at `t = 3.3`. Both `stores[1]` and
-   `stores[4]` report `OWNED_BY_SELF` — a genuine split brain.
+   `stores[4]` report `OWNED_BY_SELF`, a genuine split brain.
 5. **Reconnection.** The CLI demo restores its original full-clique topology.
    The next delivery makes both still-valid claims visible, so all four stores
    report `CONTESTED`.
 6. **Independent reconciliation.** At `t = 4.0` every store runs `reconcile()`
    and independently selects **UAV 1** (lowest owner ID). UAV 4 is the local
    loser and emits an exact-generation release.
-7. **Convergence.** The release propagates; every store now reports
+7. **Convergence.** The release propagates, and every store now reports
    `known_owner_agent_id == 1` and `contested == False`.
 8. **Mission continues.** UAV 4 immediately claims **Task 29** at `t = 4.5`
    without a restart. The run emits a 10-frame observer-only trace.
@@ -353,7 +353,7 @@ Task-claim demo: 2+2 partition, Task 19 -> UAV 1, UAV 4 released and claimed Tas
 ## Verification
 
 Run these gates on the final working tree. Exact counts and percentages are
-intentionally not pinned here; the configured branch-coverage floor is 85%.
+intentionally not pinned here. The configured branch-coverage floor is 85%.
 
 | Gate | Command | Required result |
 | --- | --- | --- |
@@ -376,7 +376,7 @@ then installs the built wheel and smoke-tests `eudis-swarm --help` / `--version`
 ## Repository Structure
 
 ```text
-eudis-swarm/
+eudis-hackathon-swarm/
 ├── src/eudis_swarm/
 │   ├── communication.py        # distance + blocked-link comms graph, components, partitions, can_deliver()
 │   ├── messaging.py            # one-hop heartbeats + multi-hop immutable evidence flooding
@@ -391,10 +391,12 @@ eudis-swarm/
 │   ├── vehicle_backend.py      # physical movement protocol + default point-mass backend
 │   ├── evaluation.py           # observer-only coordination cost measurements
 │   ├── observation_replay.py   # receiver-local external observation JSONL replay
-│   ├── generalization.py      # paired fleet/network evaluator CLI
-│   ├── robustness.py          # paired layout/fault-time evaluator CLI
-│   ├── mission_contract.py    # versioned operator intent and degradation policy
-│   ├── sitl.py                # optional standalone one-vehicle ArduPilot utility
+│   ├── generalization.py       # paired fleet/network evaluator CLI
+│   ├── robustness.py           # paired layout/fault-time evaluator CLI
+│   ├── sweep.py                # parameter-sweep CLI (eudis-swarm-sweep)
+│   ├── mission_contract.py     # versioned operator intent and degradation policy
+│   ├── sitl.py                 # optional standalone one-vehicle ArduPilot utility
+│   ├── geodesy.py              # local metres <-> WGS84 lat/lon for the SITL utility
 │   ├── simulation.py           # local claim rounds, logical clock, physics, orchestration, CLI
 │   ├── simulation_events.py    # structured comms / peer-knowledge / task-claim event types
 │   ├── metrics.py              # separate physical-mission and network metric blocks
@@ -410,29 +412,35 @@ eudis-swarm/
 │   │                           #   communication graph, transport, integration, packaging
 │   └── ...
 ├── scripts/
-├── examples/isr_replay.jsonl    # synthetic two-source observation replay
 │   ├── pitch-demo.ps1                     # runs both quorum-floor scenarios, no activation needed
-│   └── sitl-copter.sh                     # starts one headless ArduCopter SITL instance
+│   ├── sitl-copter.sh                     # starts one headless ArduCopter SITL instance
+│   └── sitl_model_error.py                # compares the point-mass model with a SITL-flown leg
+├── examples/
+│   └── isr_replay.jsonl                   # synthetic two-source observation replay
 ├── docs/
 │   ├── README.md                          # index: which document answers which question
 │   ├── onboarding.md                      # start here: setup, reading order, the rules
 │   ├── measured_results.md                # reproducible sweep results, and their stated limits
 │   ├── generalization_study.md            # paired fleet/network comparison
 │   ├── robustness_study.md                # layout/fault-time sensitivity
+│   ├── data/                              # CSV output behind the two studies above
 │   ├── demo_runbook.md                    # repeatable hackathon demonstration
 │   ├── observation_integration.md         # standalone ISR replay and proposed integration boundary
 │   ├── threat_context.md                  # cited GNSS interference context, and what it does not show
-│   ├── distributed_state_foundation.md   # state boundary, EFSM, quorum, leases, reconciliation
+│   ├── distributed_state_foundation.md    # state boundary, EFSM, quorum, leases, reconciliation
 │   ├── autonomy_efsm.md                   # generated transition tables + composition/locality rules
 │   ├── vehicle_model.md                   # open lane: kinematics, energy, calibration
 │   ├── sitl.md                            # software-in-the-loop plan, and what it must not cost
+│   ├── exploration_reference.md           # background on frontier exploration, not implemented here
 │   ├── milestones.md                      # development history: what was built, in what order
 │   ├── prior_art.md                       # evidence-bounded research/industrial comparison
 │   ├── visualization_layer.md             # the trace-playback dashboard: frames, panels, limits
 │   └── history/                           # dated records: per-prototype design notes, quality history
-├── pyproject.toml              # packaging, tool config; zero runtime dependencies
+├── pyproject.toml              # packaging, tool config, zero runtime dependencies
 ├── CHANGELOG.md  CONTRIBUTING.md  SECURITY.md
-└── .github/workflows/ci.yml    # ruff + pyright + pytest/coverage + build on Python 3.11 & 3.13
+└── .github/
+    ├── workflows/ci.yml        # ruff + pyright + pytest/coverage + build on Python 3.11 & 3.13
+    └── ISSUE_TEMPLATE/, pull_request_template.md
 ```
 
 Key areas:
@@ -451,8 +459,8 @@ Key areas:
 
 ## Running the Project
 
-Supported Python: **3.11+** (CI covers 3.11 and 3.13; 3.12 is also classified).
-The headless simulator has **no runtime dependencies**; `pytest`, coverage,
+Supported Python: **3.11+** (CI covers 3.11 and 3.13, and 3.12 is also classified).
+The headless simulator has **no runtime dependencies**. `pytest`, coverage,
 Ruff, Pyright, and `build` come from the `dev` extra.
 
 ### Environment setup and installation
@@ -530,10 +538,10 @@ eudis-swarm --scenario baseline-quorum-floor --record-trace right.trace.json
 eudis-swarm-dashboard left.trace.json
 ```
 
-The second command exits non-zero because its mission fails; the trace is still
+The second command exits non-zero because its mission fails, but the trace is still
 written. The two runs are aligned by logical time rather than frame number, so
 once the 10.75 s run has finished its panel holds its final frame while the
-other keeps going — a completed swarm beside one still trying.
+other keeps going: a completed swarm beside one still trying.
 
 Each panel is titled from the control mode recorded in its own trace, so the
 two files may be given in either order without mislabelling a run.
@@ -541,9 +549,9 @@ two files may be given in either order without mislabelling a run.
 Each panel shows positions and links, every UAV's evidence about every peer,
 its ownership belief per task, its contracted posture and intent version, and
 the evaluator-computed wasted-work counters. Peers are labelled by evidence
-and its age — `HEARD 0.4s`, `SILENT 8.7s`, `DECLARED FAILED (quorum)` — never
+and its age (`HEARD 0.4s`, `SILENT 8.7s`, `DECLARED FAILED (quorum)`), never
 by conclusion. The belief panels are reconstructed only from recorded
-per-agent trace fields; an architecture test fails the build if the dashboard
+per-agent trace fields, and an architecture test fails the build if the dashboard
 ever imports a module carrying authoritative world state.
 
 ### Parameter sweeps
@@ -565,8 +573,8 @@ eudis-swarm-dashboard trace.json
 
 ## Roadmap
 
-Mission Contract + Mission EFSM is implemented; see
-[Milestone 5](docs/milestones.md). Controlled experiments are partially
+Mission Contract + Mission EFSM is implemented (see
+[Milestone 5](docs/milestones.md)). Controlled experiments are partially
 covered: `eudis-swarm-sweep` sweeps lease policy, communication range, failure
 timeout and peer-state staleness against both control modes. A separate
 [paired fleet/network comparison](docs/generalization_study.md) checks two
@@ -576,27 +584,27 @@ timing. RF validation is not started.
 
 For the hackathon, first freeze the reproducible coordination comparison and
 recorded-trace presentation. A standalone recorded-observation replay with
-receiver-local timeouts is implemented; link-mediated delivery into the simulator
+receiver-local timeouts is implemented, while link-mediated delivery into the simulator
 and task discovery are future work. The following are longer-term plans, **not yet
 implemented**:
 
-1. **Coordinated search** — a deterministic execution baseline followed by a
+1. **Coordinated search**: a deterministic execution baseline followed by a
    separately evaluated distributed receding-horizon approach. Ownership answers
-   who may act; search planning answers how an owned objective is executed.
-2. **Role EFSM + connectivity support** — evidence- and utility-driven role
+   who may act, while search planning answers how an owned objective is executed.
+2. **Role EFSM + connectivity support**: evidence- and utility-driven role
    changes, never the shortcut “poor link implies relay.”
-3. **Cyber-physical topology repair and handoff** — close the
+3. **Cyber-physical topology repair and handoff**: close the
    network→knowledge→decision→movement loop, then add an explicit non-weapon
    track/observation handoff protocol.
-4. **Independent local safety/deconfliction supervisor** — spatial separation
+4. **Independent local safety/deconfliction supervisor**: spatial separation
    that never waits for distributed consensus.
-5. **Controlled experiments and RF validation** — sweep delivery loss, jammer
+5. **Controlled experiments and RF validation**: sweep delivery loss, jammer
    duration, topology, lease policy, clocks, and message load against centralized
    and distributed baselines. The analytical radio abstraction must not be
    described as calibrated RF until measurements support that claim.
-6. **Quantum-simulated initial planning benchmark** — QUBO/QAOA candidate plans
-   compared with greedy, heuristic, and exact classical methods where feasible;
-   never runtime ownership authority.
+6. **Quantum-simulated initial planning benchmark**: QUBO/QAOA candidate plans
+   compared with greedy, heuristic, and exact classical methods where feasible.
+   The candidate plans are never runtime ownership authority.
 7. **Connect the existing standalone ArduPilot SITL vehicle to the simulator's
    backend boundary**, followed only later by Orounda
    georeferencing and controlled mixed SITL/physical-UAV validation.
@@ -609,27 +617,27 @@ The [runbook](docs/demo_runbook.md) describes the current repeatable simulator
 demo. The following are possible future validation steps (**planned, not
 implemented**):
 
-- an **ArduPilot SITL** swarm running the coordination logic;
-- deployment at the **USRL Orounda Airfield** site;
-- **optional partner-provided physical UAV(s)** alongside SITL aircraft;
-- **mixed physical + SITL** operation in one scenario;
-- a **controlled software network partition** injected during the run;
-- a **tactical display** showing each UAV's local beliefs and task ownership;
+- an **ArduPilot SITL** swarm running the coordination logic
+- deployment at the **USRL Orounda Airfield** site
+- **optional partner-provided physical UAV(s)** alongside SITL aircraft
+- **mixed physical + SITL** operation in one scenario
+- a **controlled software network partition** injected during the run
+- a **tactical display** showing each UAV's local beliefs and task ownership
 - a **baseline vs. resilient comparison** of mission outcomes.
 
 ## License / Status
 
 This repository has **no `LICENSE` file**. The source carries an explicit
-`Copyright 2026 Charalampos Nadiotis` notice; all rights are reserved and no
+`Copyright 2026 Charalampos Nadiotis` notice. All rights are reserved and no
 open-source licence is granted or implied by access to the repository. The
-current repository is private; visibility and licensing require an explicit
+current repository is private, and visibility and licensing require an explicit
 decision before public distribution.
 
 **Status:** active hackathon R&D / prototype work. Versions track prototype
-milestones, not a stable API — interfaces change between prototypes.
+milestones, not a stable API, and interfaces change between prototypes.
 
 **Not flight software.** The core models UAV coordination algorithmically in
-two dimensions; it has no guidance, navigation, control, targeting, validated
+two dimensions. It has no guidance, navigation, control, targeting, validated
 RF propagation, or safety-critical functionality. The optional `SitlVehicle`
 utility commands one ArduPilot software-in-the-loop instance, but it is not
 connected to `Simulation` and has not been validated for physical vehicles.
