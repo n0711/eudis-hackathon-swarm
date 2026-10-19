@@ -50,6 +50,19 @@ class TrackObservation:
     bbox_xyxy: tuple[int, int, int, int]
     image_size: tuple[int, int]
     track_status: str
+    mission_position_m: tuple[float, float] | None = None
+
+    def __post_init__(self) -> None:
+        if self.mission_position_m is not None:
+            if len(self.mission_position_m) != 2 or any(
+                isinstance(v, bool)
+                or not isinstance(v, (int, float))
+                or not math.isfinite(v)
+                for v in self.mission_position_m
+            ):
+                raise ValueError(
+                    "mission_position_m must contain two finite coordinates"
+                )
 
 
 @dataclass(frozen=True)
@@ -82,6 +95,8 @@ def parse_record(payload: Mapping[str, object]) -> Record:
     an empty scene; the absence of track messages does not.
     """
 
+    if not isinstance(payload, Mapping):
+        raise ValueError("record must be an object")
     if _integer(payload.get("schema_version"), "schema_version", minimum=1) != 1:
         raise ValueError("unsupported schema_version")
     uav_id = _identifier(payload.get("uav_id"), "uav_id")
@@ -118,6 +133,25 @@ def parse_record(payload: Mapping[str, object]) -> Record:
     track_status = payload.get("track_status")
     if not isinstance(track_status, str) or track_status not in TRACK_STATES:
         raise ValueError("invalid track_status")
+    position = None
+    if "mission_position_m" in payload:
+        raw_position = payload["mission_position_m"]
+        if payload.get("coordinate_frame") != "mission_xy_m":
+            raise ValueError(
+                "mission coordinates require coordinate_frame mission_xy_m"
+            )
+        if not isinstance(raw_position, list) or len(raw_position) != 2:
+            raise ValueError("mission_position_m must contain two finite coordinates")
+        if any(
+            isinstance(v, bool)
+            or not isinstance(v, (int, float))
+            or not math.isfinite(v)
+            for v in raw_position
+        ):
+            raise ValueError("mission_position_m must contain two finite coordinates")
+        position = (float(raw_position[0]), float(raw_position[1]))
+    elif "coordinate_frame" in payload:
+        raise ValueError("coordinate_frame requires mission_position_m")
     return TrackObservation(
         uav_id,
         track_id,
@@ -127,6 +161,7 @@ def parse_record(payload: Mapping[str, object]) -> Record:
         (x0, y0, x1, y1),
         (width, height),
         str(track_status),
+        position,
     )
 
 
@@ -180,6 +215,20 @@ class ReceiverObservations:
         else:
             self._tracks[key] = (record, received_at)
         return True
+
+    def active_tracks(self, *, now: float) -> tuple[TrackObservation, ...]:
+        """Return fresh records only from locally delivered running sources."""
+        now = _time(now, "now")
+        if now < self._last_receipt:
+            raise ValueError("now precedes the last receipt")
+        return tuple(
+            track
+            for (uav_id, _), (track, receipt) in sorted(self._tracks.items())
+            if uav_id in self._sources
+            and self._sources[uav_id][0].status == "running"
+            and now - self._sources[uav_id][1] <= self.source_timeout
+            and now - receipt <= self.track_timeout
+        )
 
     def snapshot(self, *, now: float) -> ReceiverSnapshot:
         """Expose local evidence only; no field asserts physical source health."""

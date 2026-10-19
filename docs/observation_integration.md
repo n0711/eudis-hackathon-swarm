@@ -1,10 +1,10 @@
 # External ISR observation replay boundary
 
-This document specifies the boundary between an independent aerial-video perception application and EUDIS. The repository now contains a standalone, deterministic receiver-local JSONL replay adapter. It does not connect to `Simulation` task discovery or import VERA-MOT. No perception result, Raspberry Pi throughput, cross-UAV identity association, or live swarm integration is claimed here.
+This document specifies the boundary between an independent aerial-video perception application and EUDIS. The repository contains a standalone receiver-local replay adapter and an opt-in scheduled publication path into `Simulation`. Explicit georeferenced observations and delivered descriptions of accepted inspection work can make stationary tasks eligible for individual receivers. It does not import VERA-MOT. No perception result, Raspberry Pi throughput, cross-UAV identity association, or live swarm integration is claimed here.
 
 ## Producer and consumer
 
-Christoforos's VERA-MOT work is an external perception project. A separate EUDIS application may read video frames and emit local tracks. `observation_replay.py` validates externally supplied records and stores each delivered record in one receiver's private view. It does not write to peer or claim stores, mark a task complete from a bounding box, or make a local track ID into a global identity. Streaming transport and actual simulator integration remain later choices.
+Christoforos's VERA-MOT work is an external perception project. A separate EUDIS application may read video frames and emit local tracks. `observation_replay.py` validates externally supplied records and stores each delivered record in one receiver's private view. The replay store does not write to peer or claim stores, mark a task complete from a bounding box, or make a local track ID into a global identity. The simulator applies a separate task-discovery rule before its existing claim/arrival/completion protocol. Live streaming transport remains future work.
 
 The supplied VERA-MOT task note calls for desktop baseline reproduction, a separated EUDIS application, measured Raspberry Pi feasibility, versioned observations, and disconnect/reconnect testing. Its Pi references alternate between Model B and Model B+; verify the physical board before describing deployment or publishing a benchmark. The current EUDIS repository contains no VERA-MOT code or checkpoint.
 
@@ -32,15 +32,70 @@ eudis-swarm-observation-replay examples/isr_replay.jsonl --at 5.1
 
 At 0.5, `uav_1` has two distinct tracks. At 3.5 both sources time out. At 5.1 the first source has explicitly reported an empty scene and the second has reconnected with a newer observation. The output is receiver-local JSON evidence; it is not a swarm task or flight instruction.
 
+## Scheduled simulator publications and inspection tasks
+
+Run the supplied synthetic example after installing the package:
+
+```bash
+python -m eudis_swarm.observation_demo examples/isr_publications.jsonl --output demo-output/observations.json
+```
+
+This publication log is different from the standalone replay envelopes: each line has `source_agent_id`, `published_at` (simulation seconds), and `record`. Publication times are nonnegative and rounded to the simulator clock's 12 decimal places. The simulator applies its current one-hop link graph; callers cannot set `delivered:true`. Each producer ID is bound to exactly one simulated UAV. A responsive source ingests its own sensor record even while its radio is isolated. Failed endpoints cannot publish. Drops never update a receiver store. Raw observations have no forwarding, retained backlog, or implicit retry; a producer must publish fresh status/track records after reconnection. Accepted inspection objectives use the separate description-gossip path below.
+
+Optional version-1 track fields are:
+
+```json
+{"coordinate_frame":"mission_xy_m","mission_position_m":[40.0,40.0]}
+```
+
+These coordinates must be supplied independently by the producer or test fixture. They are finite local mission-plane metres, in the same frame as simulator tasks and inside the configured mission area. No pixel-to-world projection, GNSS conversion, altitude, or camera calibration is implemented. Pixels alone cannot create a task.
+
+A receiver discovers inspection work only when its own delivered track is fresh, its delivered source status is fresh and `running`, the track status is `observed`, confidence is at least 0.6, and explicit mission coordinates are present. Confidence is a configurable heuristic, not validated detection performance. Identity is `(producer_id, track_id)`; two producers with the same track number create separate objectives. Producers must not reuse a track ID for a new lifecycle within a log.
+
+The objective is a stationary point inspection. Coordinates for a producer/track pair must agree throughout a publication log; moving-target tracking is rejected. Discovery is idempotent. Once accepted, work persists through source timeout/empty-scene evidence and is completed only through the existing claim-authorized arrival rule. Existing work is not preempted. A timeout does not prove that a source or tracked object physically failed.
+
+### Offline catalog boundary
+
+This is a bounded replay prototype, not an open-ended live mission. The simulator reserves observation-derived task IDs and world positions from the supplied log at construction because the existing claim protocol requires a fixed task catalog. Receivers get the ID mapping only; the discovery module obtains coordinates from delivered records. The task-selection gate excludes every reserved objective that this receiver has not discovered. The operator/evaluator trace sees reserved world tasks before discovery; it must not be described as UAV knowledge.
+
+`config.task_count` describes the original tasks; result `total_task_count` includes reserved observation-derived tasks. Undelivered, low-confidence, or never-eligible reserved tasks remain incomplete and can cause a mission timeout. Logs may therefore specify impossible objectives; this is reported rather than counted as success. Publications beyond the mission time limit are never delivered. Peers can now receive accepted coordinates through the description-gossip path below. Task-claim messages alone still do not supply coordinates.
+
+### Synthetic example evidence
+
+With seed 2026, the example has three UAVs, six initial tasks, and one reserved inspection task. UAV 1's radio is isolated until 2.0 seconds. It discovers task 7 locally at 0.1 seconds; UAVs 2 and 3 discover it from new publications at 2.0 seconds. All seven tasks finish at 9.25 simulated seconds. The exported JSON includes configuration, receiver discoveries, and attempted delivery receipts. These numbers are simulation results, not measured perception or flight performance. The demo uses the point-mass backend and has no flight-command path.
+
+## Accepted objective sharing and recovery
+
+`Simulation(..., share_discovered_tasks=True)` enables sharing by default. Set it to `False`, or pass `--no-task-sharing` to the observation demo, for the one-hop-only comparison.
+
+Each accepted stationary objective creates an immutable description: task ID, mission position, producer ID, and producer-local track ID. A receiver sends only descriptions already in its own local discovery store. Every hop checks the current modeled link and participating endpoints. Each round snapshots senders before delivery; newly learned data is forwardable only in a subsequent round. At most one round per participating UAV is allowed per mission boundary, enough to traverse a connected component. Successful sender/receiver/task routes are acknowledged and suppressed; blocked routes retry at later mission boundaries. This models reliable route acknowledgment for immutable descriptions, not a live radio wire protocol, link bandwidth, or packet-size budget.
+
+A delivered description creates local eligibility without inserting any source status or live track. `learned_via` records `observation` versus `task_description`; `forwarder_agent_id` records the first description sender and `discovered_at` is the receiver's first receipt time. Repeated descriptions do not refresh this time. Identity/ID mismatches and conflicting stationary descriptions are rejected. Accepted work persists for the mission lifetime, so relays can forward it after the original sensor UAV fails. There is no expiry, cancellation, moving-target update, cryptographic authentication, or adversarial-source handling for descriptions.
+
+This grants task knowledge only. The existing claim protocol still determines ownership and completion; forwarding never transfers a live claim or declares the objective complete. Surviving receivers wait for their own copies of the failed owner's lease to expire before acquiring the task.
+
+Description attempt/acceptance receipts are exported separately from raw observation receipts and existing heartbeat/claim protocol metrics. Do not describe the older protocol counters as including description traffic. Raw-track and source freshness rules remain unchanged.
+
+### Paired source-failure demonstration
+
+```bash
+python -m eudis_swarm.observation_demo examples/isr_recovery_publications.jsonl --scenario relay-recovery --output demo-output/shared.json
+python -m eudis_swarm.observation_demo examples/isr_recovery_publications.jsonl --scenario relay-recovery --no-task-sharing --output demo-output/unshared.json
+```
+
+The fixture is synthetic: UAVs begin at `(0,0)`, `(4,0)`, and `(8,0)` with a five-metre link range. UAV 1 observes at 0.1 seconds and fails at 1.0 second. UAV 2 hears the observation but is busy with a separate task. UAV 3 cannot hear UAV 1's raw observation; it learns the accepted inspection point from UAV 2. After UAV 1's lease expires, UAV 3 acquires and completes that work.
+
+With sharing enabled all three objectives complete by 20.0 simulated seconds. With sharing disabled two of three complete by the 30.0-second deadline; UAV 3 never learns the inspection coordinates and UAV 2 cannot finish both jobs in time. This demonstrates the value of coordinate delivery in this controlled case, not a general performance guarantee or a validated radio/flight result. The original seven-task observation example remains unchanged at 9.25 seconds.
+
 ## Remaining integration work
 
-1. Reproduce the existing VERA-MOT video baseline and record its dependencies and checkpoint provenance on a development machine.
-2. Export an actual timestamped JSONL log from the perception application, with explicit empty-scene and source-status records. Validate its schema against the standalone replay.
-3. Specify how simulated link delivery reaches each receiver and test interruption, reconnection, and stale evidence without giving a UAV another receiver's private state.
-4. Define a separate task-discovery rule, if observations should create mission objectives; test it before connecting observations to task claims or completion.
-5. Report desktop and physical Pi measurements separately, if the latter become available. Do not send raw video on the simulated swarm link by default.
+1. Reproduce the VERA-MOT desktop baseline and record dependencies/checkpoint provenance.
+2. Export actual timestamped logs with explicit source status and empty-scene records; validate the records against the adapter.
+3. Define and validate an actual georeferencing contract before publishing mission coordinates.
+4. Add runtime catalog registration if open-ended live discovery is required. The implemented description-gossip path still uses the fixed offline catalog. Preserve private receiver knowledge.
+5. Measure physical Pi throughput and hardware/SITL integration separately. Do not send raw video on the simulated swarm link by default.
 
-The adapter must preserve the repository's world/receiver-local/observer separation. An observation can inform a future mission task only through a separately specified, tested task-discovery rule. Neither this schema nor the existing simulator supplies geolocation from a 2-D bounding box.
+The supplied IN424 material is prior art for separating sensing, objective selection, planning, and control. Its merged ground-robot map architecture is not an inherited EUDIS requirement. The comparison reference's ADDITESS label does not make ADDITESS a partner in this independent project.
 
 ## Reference provenance
 
