@@ -560,19 +560,22 @@ class CommunicationGraph:
 
         remaining = set(self._agent_ids)
         components: list[frozenset[int]] = []
-        while remaining:
-            root = min(remaining)
+        # Roots already have canonical order. Avoid repeatedly scanning remaining
+        # (quadratic for isolated nodes), and schedule each vertex only once.
+        for root in self._agent_ids:
+            if root not in remaining:
+                continue
+            remaining.remove(root)
             stack = [root]
-            component: set[int] = set()
+            component = {root}
             while stack:
                 agent_id = stack.pop()
-                if agent_id in component:
-                    continue
-                component.add(agent_id)
-                stack.extend(
-                    sorted(mutable_neighbors[agent_id] - component, reverse=True)
-                )
-            remaining -= component
+                # Traversal order affects no output: memberships are frozen sets,
+                # and components are emitted in canonical root order above.
+                discovered = mutable_neighbors[agent_id] & remaining
+                remaining.difference_update(discovered)
+                component.update(discovered)
+                stack.extend(discovered)
             components.append(frozenset(component))
 
         neighbors = {
